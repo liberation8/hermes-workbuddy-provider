@@ -41,7 +41,7 @@ provider 指向它。
 然后运行端到端自检（自带 mock 上游，不需要真登录态，不产生外网调用）：
 
 ```powershell
-& node D:\Hermes\skills\workbuddy-reverse-proxy\server\verify-proxy.mjs
+& "C:\Program Files\nodejs\node.exe" D:\Hermes\skills\workbuddy-reverse-proxy\server\verify-proxy.mjs
 ```
 
 预期：逐行打印 `PASS  <检查项名>` / `FAIL  <检查项名>  → <细节>`，末尾一行汇总
@@ -74,7 +74,7 @@ Copy-Item D:\Hermes\skills\workbuddy-reverse-proxy\server\config.example.json `
 前台（调试首选，Ctrl+C 停）：
 
 ```powershell
-& node D:\Hermes\skills\workbuddy-reverse-proxy\server\workbuddy-proxy.mjs
+& "C:\Program Files\nodejs\node.exe" D:\Hermes\skills\workbuddy-reverse-proxy\server\workbuddy-proxy.mjs
 ```
 
 预期 stdout 一行 JSON：
@@ -152,7 +152,7 @@ context_window, max_tokens, supports_images} ] }`，`data` 非空。
      显式设置了 `WORKBUDDY_PROXY_BEARER` / `config.bearerToken`、或删掉状态文件时才会
      变。变了就要同步 `.env`。
 - 看日志：前台直接看 stdout/stderr；计划任务/自启拉起的实例看
-  `$DSH_HOME\logs\workbuddy-proxy.out.log` 与 `.err.log`。
+  `D:\dsh\logs\workbuddy-proxy.out.log` 与 `.err.log`。
 - 换模型：`/model` 临时切，或改 `config.yaml` 的 `model.name` 永久切。
 
 ## 反代会静默退出（实测踩过，必看）
@@ -178,7 +178,7 @@ Get-NetTCPConnection -LocalPort 8788 -State Listen -ErrorAction SilentlyContinue
 Invoke-WebRequest http://127.0.0.1:8788/healthz -TimeoutSec 5 -UseBasicParsing
 
 # 3. 刚死是怎么死的（只在你用自启脚本拉起时有内容）
-Get-Content $DSH_HOME\logs\workbuddy-proxy.err.log -Tail 20
+Get-Content D:\dsh\logs\workbuddy-proxy.err.log -Tail 20
 ```
 
 `/healthz` 返回 `{"ok":true,...}` 而 Hermes 仍报错 → 问题不在反代，去查
@@ -187,11 +187,11 @@ Get-Content $DSH_HOME\logs\workbuddy-proxy.err.log -Tail 20
 ### 一键拉起（幂等，已在跑就跳过）
 
 ```powershell
-& "$env:APP:ATA\Microsoft\Windows\Start Menu\Programs\Startup\workbuddy-proxy-autostart.cmd"
+& "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\workbuddy-proxy-autostart.cmd"
 ```
 
 它做了三件事：检测 8788 是否已监听（已监听则记一行 skip 直接退出）→ 超过
-5 MB 的日志轮转为 `.1` → 后台拉起并把输出写进 `$DSH_HOME\logs\`。
+5 MB 的日志轮转为 `.1` → 后台拉起并把输出写进 `D:\dsh\logs\`。
 
 ### 让它开机自启（推荐）
 
@@ -199,13 +199,13 @@ Get-Content $DSH_HOME\logs\workbuddy-proxy.err.log -Tail 20
 
 ```powershell
 Copy-Item "D:\Hermes\skills\workbuddy-reverse-proxy\server\autostart.cmd" `
-  "$env:APP:ATA\Microsoft\Windows\Start Menu\Programs\Startup\workbuddy-proxy-autostart.cmd"
+  "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\workbuddy-proxy-autostart.cmd"
 ```
 
 卸载：删除该文件，或运行 `server\uninstall-autostart.cmd`（**不会**停掉正在运行的实例）。
 
 验证自启是否生效：**下次登录后**先看 `Get-NetTCPConnection -LocalPort 8788`，
-再看 `$DSH_HOME\logs\autostart.log` 里有没有当天的 `starting workbuddy-proxy`。
+再看 `D:\dsh\logs\autostart.log` 里有没有当天的 `starting workbuddy-proxy`。
 
 > 两个实现细节，改脚本时别踩：
 > 1. `autostart.cmd` **必须是纯 ASCII**。中文注释在 `.cmd` 里会按 OEM 代码页解析，
@@ -288,7 +288,7 @@ no_proxy=127.0.0.1,localhost
   `WORKBUDDY_PROXY_TOKEN` 直接给 token 绕开。这是**环境限制而非配置错误**，
   诊断方法与原理详见 `references/hermes-wiring.md` §7.6。
 - 信封解密需要向 WorkBuddy 主程序（Electron）询问守护密钥。主程序装在非默认
-  盘符/路径（如 `D:\Apps\WorkBuddyAI\WorkBuddyAI.exe`）时靠注册表
-  `:isplayIcon` 定位；若 `reg.exe` 不可用（受限沙箱、组策略），自动探测会失败，
+  盘符/路径（如 `D:\wkb\WorkBuddyAI\WorkBuddyAI.exe`）时靠注册表
+  `DisplayIcon` 定位；若 `reg.exe` 不可用（受限沙箱、组策略），自动探测会失败，
   设环境变量 `WORKBUDDY_EXE=<可执行文件完整路径>` 直接指定即可。
 - Windows 系统代理会拦截出站请求造成空的 502，见「故障处置 → 系统代理回环」。

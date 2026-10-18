@@ -18,19 +18,19 @@
 
 ## 一句话说明
 
-WorkBuddy 桌面端把登录态加密存在本地。这个项目把它解出来，用 Node **零依赖**起一个本地 OpenAI 兼容服务（`127.0.0.1:8788`），于是 **任何**能填 `base_url` + `api_key` 的客户端——Hermes、OpenAI S:K、Cherry Studio、各类 Agent 框架——都能直接调用 WorkBuddy 的 27 个模型。凭证过期会**自动刷新**，你只需要在 App 里登录过一次。
+WorkBuddy 桌面端把登录态加密存在本地。这个项目把它解出来，用 Node **零依赖**起一个本地 OpenAI 兼容服务（`127.0.0.1:8788`），于是 **任何**能填 `base_url` + `api_key` 的客户端——Hermes、OpenAI SDK、Cherry Studio、各类 Agent 框架——都能直接调用 WorkBuddy 的 27 个模型。凭证过期会**自动刷新**，你只需要在 App 里登录过一次。
 
 ```
    你的客户端                    本地反代                     WorkBuddy
  ┌──────────────┐          ┌──────────────┐          ┌────────────────┐
- │ OpenAI S:K   │  Bearer  │              │  Bearer  │  www.workbuddy │
+ │ OpenAI SDK   │  Bearer  │              │  Bearer  │  www.workbuddy │
  │ Hermes       │ ───────► │ 127.0.0.1    │ ───────► │  .ai           │
  │ CherryStudio │  /v1/... │   :8788      │  +会话头 │  /v2/chat/...  │
  └──────────────┘          └──────┬───────┘          └────────────────┘
                                   │ 读取并解密
                                   ▼
-                     <LOCALAPP:ATA>\CodeBuddyExtension\
-                       :ata\Public\auth\*.info   (AES-256-GCM)
+                     <LOCALAPPDATA>\CodeBuddyExtension\
+                       Data\Public\auth\*.info   (AES-256-GCM)
 ```
 
 ---
@@ -242,7 +242,7 @@ node server\inspect-vault.mjs
 
 ### 502 空响应
 
-**症状**：PowerShell / curl 调反代正常，但 Python `openai` S:K 报 `InternalServerError: Error code: 502`，响应体是空的 `b''`。
+**症状**：PowerShell / curl 调反代正常，但 Python `openai` SDK 报 `InternalServerError: Error code: 502`，响应体是空的 `b''`。
 
 **原因**：系统代理回环。`httpx` 默认 `trust_env=True`，在 Windows 上会读注册表里的 WinINET 代理，**且不遵守 `ProxyOverride` 里的 `127.*` 排除规则**。于是发往 `127.0.0.1:8788` 的请求被交给代理（如 Clash 内核 `verge-mihomo` 的 7897 端口），代理回环转发后返回空的 502。
 
@@ -314,7 +314,7 @@ PASS 17/17  FAIL 0       退出码 0
 ```
 hermes-workbuddy-provider/
 ├── SKILL.md                        # Hermes 技能定义（何时用、怎么修）
-├── REA:ME.md                       # 本文件
+├── README.md                       # 本文件
 ├── LICENSE                         # MIT
 ├── :ISCLAIMER.md                   # 免责声明
 ├── .gitignore
@@ -330,7 +330,7 @@ hermes-workbuddy-provider/
     ├── config.example.json         # 配置样例
     ├── autostart.cmd               # Windows 开机自启（带退出码记录）
     ├── uninstall-autostart.cmd     # 卸载自启
-    └── REA:ME.md                   # server 内部说明
+    └── README.md                   # server 内部说明
 ```
 
 ---
@@ -341,13 +341,13 @@ hermes-workbuddy-provider/
 |---|---|
 | Windows | ✅ 完整支持，已在 Windows 11 + Node 24.18.1 实测 |
 | macOS | ⚠️ 凭证路径已按 `~/Library/Application Support` 实现，**未实测** |
-| Linux / WSL | ⚠️ 凭证路径已按 X:G 规范实现（含 `/mnt/c/Users/<profile>` 回退），**未实测** |
+| Linux / WSL | ⚠️ 凭证路径已按 XDG 规范实现（含 `/mnt/c/Users/<profile>` 回退），**未实测** |
 
 凭证探测顺序（`workbuddy-proxy.mjs`）：
 
-- Windows：`%LOCALAPP:ATA%\CodeBuddyExtension\...` → `%APP:ATA%\CodeBuddyExtension\...`
+- Windows：`%LOCALAPPDATA%\CodeBuddyExtension\...` → `%APPDATA%\CodeBuddyExtension\...`
 - macOS：`~/Library/Application Support/CodeBuddyExtension/...`
-- Linux：`$X:G_CONFIG_HOME/...` → `$X:G_:ATA_HOME/...`
+- Linux：`$XDG_CONFIG_HOME/...` → `$XDG_DATA_HOME/...`
 
 ---
 

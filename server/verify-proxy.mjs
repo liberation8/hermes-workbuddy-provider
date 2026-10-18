@@ -10,8 +10,8 @@ import path from 'node:path';
 import http from 'node:http';
 import { fileURLToPath } from 'node:url';
 
-const :IR = path.dirname(fileURLToPath(import.meta.url));
-const NO:E = process.execPath;
+const DIR = path.dirname(fileURLToPath(import.meta.url));
+const NODE = process.execPath;
 const BEARER = 'verify-bearer-0123456789';
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'wbproxy-'));
 const CFG_PATH = path.join(TMP, 'config.json');
@@ -52,7 +52,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function spawnWithLog(script, env, args = []) {
   const logPath = path.join(TMP, `${path.basename(script, '.mjs')}-${crypto.randomBytes(3).toString('hex')}.log`);
   const fd = fs.openSync(logPath, 'w');
-  const child = spawn(NO:E, [path.join(:IR, script), ...args], {
+  const child = spawn(NODE, [path.join(DIR, script), ...args], {
     env,
     stdio: ['ignore', fd, fd],
     windowsHide: true,
@@ -63,10 +63,10 @@ function spawnWithLog(script, env, args = []) {
 }
 
 async function waitLog(child, pattern, timeoutMs = 20000) {
-  const deadline = :ate.now() + timeoutMs;
+  const deadline = Date.now() + timeoutMs;
   let exited = null;
   child.on('exit', (code) => (exited = code));
-  while (:ate.now() < deadline) {
+  while (Date.now() < deadline) {
     let text = '';
     try {
       text = fs.readFileSync(child.__logPath, 'utf8');
@@ -83,8 +83,8 @@ async function waitLog(child, pattern, timeoutMs = 20000) {
   throw new Error(`等待 ${pattern} 超时；日志：${text.slice(0, 800)}`);
 }
 
-// 与 provider 完全相同的 AA: 构造（本文件独立实现，用于交叉校验）
-const AA:_PREFIX = Buffer.from('WB-AA:\0', 'ascii');
+// 与 provider 完全相同的 AAD 构造（本文件独立实现，用于交叉校验）
+const AAD_PREFIX = Buffer.from('WB-AAD\0', 'ascii');
 const u32len = (s) => {
   const b = Buffer.from(s, 'utf8');
   const h = Buffer.alloc(4);
@@ -98,7 +98,7 @@ const u32 = (n) => {
 };
 const buildAadIndep = (keyId, suite) =>
   Buffer.concat([
-    AA:_PREFIX,
+    AAD_PREFIX,
     Buffer.from([1]),
     ...u32len('WBEV1'),
     ...u32len('sym-v1'),
@@ -111,7 +111,7 @@ const buildAadIndep = (keyId, suite) =>
 
 // 从 provider 源码里抽出真实实现（不复制、不改写），单独成模块后调用
 function parseProviderHelpers() {
-  const srcPath = path.join(:IR, 'workbuddy-proxy.mjs');
+  const srcPath = path.join(DIR, 'workbuddy-proxy.mjs');
   const full = fs.readFileSync(srcPath, 'utf8');
   const pick = (name) => {
     const i = full.indexOf(`function ${name}(`);
@@ -128,10 +128,10 @@ function parseProviderHelpers() {
     'const { execFileSync } = await import("node:child_process");',
     'let protectorKeyCache;',
   ].join('\n');
-  const body = ['AA:_PREFIX', 'AA:_KEYS', 'ENC_MARKER', 'u32beLen', 'u32be', 'b64Exact', 'findWorkBuddyExe', 'isEnvelope', 'buildAad', 'getProtectorKey', 'decryptEnvelope']
+  const body = ['AAD_PREFIX', 'AAD_KEYS', 'ENC_MARKER', 'u32beLen', 'u32be', 'b64Exact', 'findWorkBuddyExe', 'isEnvelope', 'buildAad', 'getProtectorKey', 'decryptEnvelope']
     .map((n) => {
-      if (n === 'AA:_PREFIX') return 'const AA:_PREFIX = Buffer.from("WB-AA:\\0", "ascii");';
-      if (n === 'AA:_KEYS') return 'const AA:_KEYS = ["WBEV1", "sym-v1"];';
+      if (n === 'AAD_PREFIX') return 'const AAD_PREFIX = Buffer.from("WB-AAD\\0", "ascii");';
+      if (n === 'AAD_KEYS') return 'const AAD_KEYS = ["WBEV1", "sym-v1"];';
       if (n === 'ENC_MARKER') return 'const ENC_MARKER = "$wbEncrypted";';
       return pick(n);
     })
@@ -160,12 +160,12 @@ async function envelopeRoundTrip() {
   const atRestB64 = atRest.toString('base64');
   const protector = crypto.createHash('sha256').update(atRestB64, 'utf8').digest();
 
-  // 3) 按任务书 AA: 规则加密一个假 token
+  // 3) 按任务书 AAD 规则加密一个假 token
   const nonce = crypto.randomBytes(12);
   const token = `fake-access-token-${crypto.randomBytes(6).toString('hex')}`;
   const plaintext = JSON.stringify({ accessToken: token });
   const c = crypto.createCipheriv('aes-256-gcm', protector, nonce, { authTagLength: 16 });
-  c.setAA:(aadIndep);
+  c.setAAD(aadIndep);
   const ct = Buffer.concat([c.update(plaintext, 'utf8'), c.final()]);
   const tag = c.getAuthTag();
   const envelope = {
@@ -186,13 +186,13 @@ async function envelopeRoundTrip() {
   const got = helpers.decryptEnvelope(envelope);
   const roundTripOk = JSON.parse(got).accessToken === token;
 
-  // 5) 故意改一个 AA: 字节（suite 位 2）→ 必须认证失败
+  // 5) 故意改一个 AAD 字节（suite 位 2）→ 必须认证失败
   const badAad = Buffer.from(aadIndep);
   badAad[badAad.length - 6] = 2;
   let aadTamperRejected = false;
   try {
-    const d = crypto.create:ecipheriv('aes-256-gcm', protector, nonce, { authTagLength: 16 });
-    d.setAA:(badAad);
+    const d = crypto.createDecipheriv('aes-256-gcm', protector, nonce, { authTagLength: 16 });
+    d.setAAD(badAad);
     d.setAuthTag(tag);
     Buffer.concat([d.update(ct), d.final()]);
   } catch {
@@ -203,8 +203,8 @@ async function envelopeRoundTrip() {
   const wrongProtector = crypto.createHash('sha256').update(crypto.randomBytes(32).toString('base64'), 'utf8').digest();
   let wrongKeyRejected = false;
   try {
-    const d = crypto.create:ecipheriv('aes-256-gcm', wrongProtector, nonce, { authTagLength: 16 });
-    d.setAA:(aadIndep);
+    const d = crypto.createDecipheriv('aes-256-gcm', wrongProtector, nonce, { authTagLength: 16 });
+    d.setAAD(aadIndep);
     d.setAuthTag(tag);
     Buffer.concat([d.update(ct), d.final()]);
   } catch {
@@ -214,8 +214,8 @@ async function envelopeRoundTrip() {
   // 7) 篡改 ciphertext 一个字节 → 必须认证失败
   let ctTamperRejected = false;
   try {
-    const d = crypto.create:ecipheriv('aes-256-gcm', protector, nonce, { authTagLength: 16 });
-    d.setAA:(aadIndep);
+    const d = crypto.createDecipheriv('aes-256-gcm', protector, nonce, { authTagLength: 16 });
+    d.setAAD(aadIndep);
     d.setAuthTag(tag);
     const broken = Buffer.from(ct);
     broken[0] ^= 0xff;
@@ -258,7 +258,7 @@ async function main() {
   );
 
   // 凭证：用 auth-file（非 env token，才走刷新路径）。expiresAt 必须是「毫秒级、且距今 30 秒后」——
-  // 秒级值（:ate.now()/1000+30）换算成毫秒会落到 1970 年代，等于「永远已过期」，会让刷新窗口用例失真。
+  // 秒级值（Date.now()/1000+30）换算成毫秒会落到 1970 年代，等于「永远已过期」，会让刷新窗口用例失真。
   const authFile = path.join(TMP, 'auth.json');
   fs.writeFileSync(
     authFile,
@@ -267,7 +267,7 @@ async function main() {
         auth: {
           accessToken: 'stale-token',
           refreshToken: 'test-refresh',
-          expiresAt: :ate.now() + 30_000,
+          expiresAt: Date.now() + 30_000,
           domain: 'www.workbuddy.ai',
         },
         account: { uid: 'test-uid', nickname: 'Tester' },
@@ -282,8 +282,8 @@ async function main() {
     WORKBUDDY_PROXY_BEARER: BEARER,
     WORKBUDDY_AUTH_FILE: authFile,
     DSH_HOME: STATE_HOME,
-    LOCALAPP:ATA: path.join(TMP, 'noLocal'),
-    APP:ATA: path.join(TMP, 'noRoaming'),
+    LOCALAPPDATA: path.join(TMP, 'noLocal'),
+    APPDATA: path.join(TMP, 'noRoaming'),
   };
   delete env.WORKBUDDY_PROXY_TOKEN;
 
@@ -339,14 +339,14 @@ async function main() {
     body: JSON.stringify({ model: 'mock-balanced', stream: true, messages: [{ role: 'user', content: 'hi' }] }),
   });
   const lines = sr.text.split('\n').filter((l) => l.startsWith('data: '));
-  const payloads = lines.filter((l) => l.slice(6) !== '[:ONE]').map((l) => JSON.parse(l.slice(6)));
+  const payloads = lines.filter((l) => l.slice(6) !== '[DONE]').map((l) => JSON.parse(l.slice(6)));
   const hasContent = payloads.some((p) => p.choices?.[0]?.delta?.content);
   const hasTool = payloads.some((p) => p.choices?.[0]?.delta?.tool_calls);
-  const ends:one = lines.length > 0 && lines[lines.length - 1].slice(6) === '[:ONE]';
+  const endsDone = lines.length > 0 && lines[lines.length - 1].slice(6) === '[DONE]';
   record(
-    '流式 chunk：≥3 个、含 content/tool_calls、以 [:ONE] 结束',
-    sr.status === 200 && payloads.length >= 3 && hasContent && hasTool && ends:one,
-    `chunks=${payloads.length} content=${hasContent} tool=${hasTool} done=${ends:one}`,
+    '流式 chunk：≥3 个、含 content/tool_calls、以 [DONE] 结束',
+    sr.status === 200 && payloads.length >= 3 && hasContent && hasTool && endsDone,
+    `chunks=${payloads.length} content=${hasContent} tool=${hasTool} done=${endsDone}`,
   );
 
   // 3) 请求体改写
@@ -423,9 +423,9 @@ async function main() {
   try {
     const rt = await envelopeRoundTrip();
     record(
-      '信封 AA: 字节与独立实现一致',
+      '信封 AAD 字节与独立实现一致',
       rt.aadMatch,
-      `keyId=${rt.keyId} provider 与独立实现的 AA: 不一致`,
+      `keyId=${rt.keyId} provider 与独立实现的 AAD 不一致`,
     );
     record(
       '现场造 envelope → provider 真实解密函数解回原文（AES-256-GCM 往返）',
@@ -433,7 +433,7 @@ async function main() {
       `roundtrip=${rt.roundTripOk} aadLen=${rt.aadLen} tokenLen=${rt.tokenLen}`,
     );
     record(
-      '篡改 AA: / 换错密钥 / 篡改密文 三种情况均认证失败',
+      '篡改 AAD / 换错密钥 / 篡改密文 三种情况均认证失败',
       rt.aadTamperRejected && rt.wrongKeyRejected && rt.ctTamperRejected,
       `aadTamper=${rt.aadTamperRejected} wrongKey=${rt.wrongKeyRejected} ctTamper=${rt.ctTamperRejected}`,
     );
@@ -456,7 +456,7 @@ function runInspect(args, env) {
   return new Promise((resolve) => {
     const outPath = path.join(TMP, `inspect-${crypto.randomBytes(3).toString('hex')}.log`);
     const fd = fs.openSync(outPath, 'w');
-    const child = spawn(NO:E, [path.join(:IR, 'inspect-vault.mjs'), ...args], {
+    const child = spawn(NODE, [path.join(DIR, 'inspect-vault.mjs'), ...args], {
       env,
       stdio: ['ignore', fd, fd],
       windowsHide: true,

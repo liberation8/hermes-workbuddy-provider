@@ -7,7 +7,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 
-const JSON_MO:E = process.argv.includes('--json');
+const JSON_MODE = process.argv.includes('--json');
 const ENC_MARKER = '$wbEncrypted';
 
 function descriptorOf(value) {
@@ -26,8 +26,8 @@ function descriptorOf(value) {
   return { kind: 'unrecognized' };
 }
 
-// ---------- 与 provider 完全一致的 AA: 与解密 ----------
-const AA:_PREFIX = Buffer.from('WB-AA:\0', 'ascii');
+// ---------- 与 provider 完全一致的 AAD 与解密 ----------
+const AAD_PREFIX = Buffer.from('WB-AAD\0', 'ascii');
 const u32beLen = (s) => {
   const b = Buffer.from(s, 'utf8');
   const h = Buffer.alloc(4);
@@ -40,7 +40,7 @@ const u32be = (n) => {
   return b;
 };
 function buildAad(keyId, suite) {
-  const parts = [AA:_PREFIX, Buffer.from([1])];
+  const parts = [AAD_PREFIX, Buffer.from([1])];
   for (const k of ['WBEV1', 'sym-v1']) parts.push(...u32beLen(k));
   parts.push(u32be(suite));
   parts.push(...u32beLen(keyId));
@@ -101,19 +101,19 @@ function findWorkBuddyExe() {
     }
   }
   for (const key of keys) {
-    const dn = regQuery(['query', key, '/v', ':isplayName']);
+    const dn = regQuery(['query', key, '/v', 'DisplayName']);
     if (!dn || !/workbuddy/i.test(dn)) continue;
-    for (const field of [':isplayIcon', 'InstallLocation']) {
+    for (const field of ['DisplayIcon', 'InstallLocation']) {
       const v = regQuery(['query', key, '/v', field]);
       if (!v) continue;
       const m = v.match(new RegExp(`${field}\\s+REG_[A-Z_]+\\s+(.+)$`, 'm'));
       if (!m) continue;
       const val = m[1].trim().replace(/^"|"$/g, '');
-      if (field === ':isplayIcon') push(val.split(',')[0]);
+      if (field === 'DisplayIcon') push(val.split(',')[0]);
       else for (const n of ['WorkBuddy.exe', 'WorkBuddyAI.exe', 'WorkBuddy AI.exe']) push(path.join(val, n));
     }
   }
-  const local = process.env.LOCALAPP:ATA || path.join(os.homedir(), 'App:ata', 'Local');
+  const local = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
   push(path.join(local, 'Programs', 'WorkBuddy', 'WorkBuddy.exe'));
   push(path.join(local, 'Programs', 'WorkBuddy AI', 'WorkBuddy AI.exe'));
   for (const p of out) {
@@ -149,7 +149,7 @@ function getProtectorKey() {
       timeout: 10_000,
       maxBuffer: 1024 * 1024,
       windowsHide: true,
-      env: { ...process.env, ELECTRON_RUN_AS_NO:E: '1' },
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
       stdio: ['ignore', 'pipe', 'ignore'],
     });
   } catch (err) {
@@ -193,8 +193,8 @@ function decryptEnvelope(value) {
   if (!pk.key) return { error: pk.error, exe: pk.exe, stage: 'protectorKey', keyId };
 
   try {
-    const d = crypto.create:ecipheriv('aes-256-gcm', pk.key, nonce, { authTagLength: 16 });
-    d.setAA:(buildAad(keyId, 1));
+    const d = crypto.createDecipheriv('aes-256-gcm', pk.key, nonce, { authTagLength: 16 });
+    d.setAAD(buildAad(keyId, 1));
     d.setAuthTag(authTag);
     const plain = Buffer.concat([d.update(ciphertext), d.final()]).toString('utf8');
     return { plain, exe: pk.exe, keyId };
@@ -242,10 +242,10 @@ function summarize(value, expiresAtMs) {
     // 只给长度与前 4 位，绝不打印全文
     tokenLength: t.token.length,
     tokenPrefix4: t.token.slice(0, 4),
-    envelope:ecrypted: !!t.decrypted,
+    envelopeDecrypted: !!t.decrypted,
   };
   if (expiresAtMs != null) {
-    const remainMin = Math.round((expiresAtMs - :ate.now()) / 60000);
+    const remainMin = Math.round((expiresAtMs - Date.now()) / 60000);
     out.expiresInMinutes = remainMin;
   }
   return out;
@@ -261,9 +261,9 @@ function readJson(file) {
 
 function collect() {
   const sources = [];
-  const local = process.env.LOCALAPP:ATA || path.join(os.homedir(), 'App:ata', 'Local');
-  const roaming = process.env.APP:ATA || path.join(os.homedir(), 'App:ata', 'Roaming');
-  const rel = path.join('CodeBuddyExtension', ':ata', 'Public', 'auth', 'workbuddy-desktop-ai.info');
+  const local = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
+  const roaming = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+  const rel = path.join('CodeBuddyExtension', 'Data', 'Public', 'auth', 'workbuddy-desktop-ai.info');
 
   // 1) env token
   const envToken = process.env.WORKBUDDY_PROXY_TOKEN;
@@ -275,13 +275,13 @@ function collect() {
     ...(envToken
       ? {
           kind: 'plaintext',
-          decrypt: { ok: true, tokenLength: envToken.length, tokenPrefix4: envToken.slice(0, 4), envelope:ecrypted: false },
+          decrypt: { ok: true, tokenLength: envToken.length, tokenPrefix4: envToken.slice(0, 4), envelopeDecrypted: false },
         }
       : { kind: 'absent' }),
   });
 
   // 2) 插件自有副本
-  const own = '::\\dsh\\.workbuddy-auth.json';
+  const own = 'D:\\dsh\\.workbuddy-auth.json';
   const ownRead = readJson(own);
   sources.push({
     name: 'own-copy',
@@ -342,7 +342,7 @@ function main() {
   const sources = collect();
   const active = sources.find((s) => s.present && (s.kind === 'plaintext' || s.kind === 'encrypted-envelope-version'));
 
-  if (JSON_MO:E) {
+  if (JSON_MODE) {
     process.stdout.write(`${JSON.stringify({ active: active?.name || null, sources }, null, 2)}\n`);
     process.exit(0);
   }
@@ -357,7 +357,7 @@ function main() {
       if (s.decrypt.ok) {
         process.stdout.write(
           `    解出成功：长度 ${s.decrypt.tokenLength}，前缀前 4 位 "${s.decrypt.tokenPrefix4}"，` +
-            `信封解密=${s.decrypt.envelope:ecrypted ? '是' : '否（明文）'}` +
+            `信封解密=${s.decrypt.envelopeDecrypted ? '是' : '否（明文）'}` +
             `${s.expiresInMinutes != null ? `，剩余 ${s.expiresInMinutes} 分钟` : ''}\n`,
         );
       } else {

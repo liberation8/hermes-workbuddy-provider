@@ -40,9 +40,9 @@ node verify-proxy.mjs
 | `port` | `8788` | `0` 表示随机端口 |
 | `bearerToken` | 空 | 本地鉴权用；`WORKBUDDY_PROXY_BEARER` 优先 |
 | `upstreamBase` | `https://www.workbuddy.ai` | 上游基址 |
-| `appVersion` | `5.8.4` | 写进 UA / `X-I:E-Version` |
+| `appVersion` | `5.8.4` | 写进 UA / `X-IDE-Version` |
 | `productName` | `WorkBuddy AI` | 国际版 product 名 |
-| `catalogPath` | `$DSH_HOME\.workbuddy-ai-catalog.json` | 模型目录缓存，与既有文件兼容 |
+| `catalogPath` | `D:\dsh\.workbuddy-ai-catalog.json` | 模型目录缓存，与既有文件兼容 |
 | `credential` | 无 | 可选内联凭证 |
 
 `host` 固定 `127.0.0.1`，不提供配置项；反代不接受 `request_timeout_seconds` 之类的键（写了也被忽略）。
@@ -51,10 +51,10 @@ node verify-proxy.mjs
 ## 凭证来源（优先级从高到低）
 
 1. `WORKBUDDY_PROXY_TOKEN`（直接给 accessToken）
-2. `$DSH_HOME\.workbuddy-auth.json`（插件自有副本，`version` 必须为 1；刷新后会回写这里）
+2. `D:\dsh\.workbuddy-auth.json`（插件自有副本，`version` 必须为 1；刷新后会回写这里）
 3. `WORKBUDDY_AUTH_FILE` 指定的文件
-4. 桌面 App 登录态：`%LOCALAPP:ATA%\CodeBuddyExtension\:ata\Public\auth\workbuddy-desktop-ai.info`，
-   再回落 `%APP:ATA%\...`。5.6+ 是信封加密态（`$wbEncrypted`），需要 WorkBuddy 的 Electron 可执行文件取守护密钥才能解。
+4. 桌面 App 登录态：`%LOCALAPPDATA%\CodeBuddyExtension\Data\Public\auth\workbuddy-desktop-ai.info`，
+   再回落 `%APPDATA%\...`。5.6+ 是信封加密态（`$wbEncrypted`），需要 WorkBuddy 的 Electron 可执行文件取守护密钥才能解。
    本仓库**只读不写**这个文件。
 
 都没有 → 启动时可诊断报错、退出码 `2`。

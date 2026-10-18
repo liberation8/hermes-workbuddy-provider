@@ -52,7 +52,7 @@ function assertUpstreamHeaders(headers, required) {
   if (!required.refresh && !/^Bearer\s+\S+$/.test(auth)) missing.push('authorization');
   if (required.refresh && auth && !/^Bearer\s+\S+$/.test(auth)) missing.push('authorization-format');
   // 模型目录（/v3/config）上游只要求 Authorization/Accept/Origin/Referer/X-Requested-With/X-Product/UA，
-  // 不要求对话那套 X-Conversation-*/X-I:E-*，这里分档校验，否则会把正确实现误判成缺头。
+  // 不要求对话那套 X-Conversation-*/X-IDE-*，这里分档校验，否则会把正确实现误判成缺头。
   if (!required.catalog && !required.refresh) {
     for (const k of ['x-conversation-id', 'x-conversation-request-id', 'x-conversation-message-id']) {
       if (!h[k]) missing.push(k);
@@ -125,7 +125,7 @@ const server = http.createServer(async (req, res) => {
         models: [
           { id: 'mock-fast', name: 'Mock Fast', maxInputTokens: 200000, maxOutputTokens: 32000, contextWindow: 200000, supportsImages: true },
           { id: 'mock-balanced', name: 'Mock Balanced', maxInputTokens: 256000, maxOutputTokens: 32000, contextWindow: 256000, supportsImages: true },
-          { id: 'mock-disabled', name: 'Mock :isabled', disabled: true, maxInputTokens: 128000, maxOutputTokens: 8000 },
+          { id: 'mock-disabled', name: 'Mock Disabled', disabled: true, maxInputTokens: 128000, maxOutputTokens: 8000 },
           { id: 'mock-zero-out', name: 'Mock Zero Out', maxInputTokens: 128000, maxOutputTokens: 0 },
           { id: 'mock-not-in-cli', name: 'Mock Not In CLI', maxInputTokens: 128000, maxOutputTokens: 8000 },
         ],
@@ -198,7 +198,7 @@ const server = http.createServer(async (req, res) => {
     });
     sse(res, { ...base, choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] });
     sse(res, { ...base, choices: [], usage: { prompt_tokens: 11, completion_tokens: 7, total_tokens: 18 } });
-    res.write('data: [:ONE]\n\n');
+    res.write('data: [DONE]\n\n');
     res.end();
     return;
   }

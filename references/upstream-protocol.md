@@ -13,9 +13,9 @@
 |---|---|
 | 服务监听 | `127.0.0.1`（仅本机） |
 | 默认端口 | `8788` |
-| 启动 | `node server\workbuddy-proxy.mjs` |
+| 启动 | `"C:\Program Files\nodejs\node.exe" server\workbuddy-proxy.mjs` |
 | 配置来源 | 环境变量 `WORKBUDDY_PROXY_CONFIG` 指定 json 路径；否则 `server\config.json`（由 `config.example.json` 复制） |
-| 服务 node | `node`，版本 `24.18.1` |
+| 服务 node | `C:\Program Files\nodejs\node.exe`，版本 `24.18.1` |
 
 ### 对外路由
 
@@ -52,9 +52,9 @@ name / context_window / max_tokens / supports_images`，其中 `context_window` 
 | 顺序 | 来源 |
 |---|---|
 | 1 | 环境变量 `WORKBUDDY_PROXY_TOKEN` |
-| 2 | `$DSH_HOME\.workbuddy-auth.json` |
+| 2 | `D:\dsh\.workbuddy-auth.json` |
 | 3 | 环境变量 `WORKBUDDY_AUTH_FILE` 指向的文件 |
-| 4 | WorkBuddy 桌面 App 登录态：`%LOCALAPP:ATA%\CodeBuddyExtension\:ata\Public\auth\workbuddy-desktop-ai.info` |
+| 4 | WorkBuddy 桌面 App 登录态：`%LOCALAPPDATA%\CodeBuddyExtension\Data\Public\auth\workbuddy-desktop-ai.info` |
 
 第 4 项在 App 5.6+ 可能是**信封加密态**，服务负责自行解密。
 四个来源都拿不到 → 启动即失败（不发请求）。
@@ -134,7 +134,7 @@ glm-5.3, glm-5.2, kimi-k3, kimi-k2.6, kimi-k2.8-preview
 
 | 项 | 值 |
 |---|---|
-| 文件 | `%LOCALAPP:ATA%\CodeBuddyExtension\:ata\Public\auth\workbuddy-desktop-ai.info` |
+| 文件 | `%LOCALAPPDATA%\CodeBuddyExtension\Data\Public\auth\workbuddy-desktop-ai.info` |
 | 形态 | 可能是**信封加密态**（App 5.6+） |
 | 责任方 | 反代自行解密，Hermes 与用户不感知 |
 
@@ -160,4 +160,4 @@ glm-5.3, glm-5.2, kimi-k3, kimi-k2.6, kimi-k2.8-preview
 - `reasoning_effort` 各档位在上游的实际行为（只确认了 `"off"` → 400）
 - 刷新端点与过期窗口
 - 信封加密的解密实现
-- 流式 SSE 的分段语义（是否与 OpenAI 完全一致：`[:ONE]`、`finish_reason`、`usage` 位置）
+- 流式 SSE 的分段语义（是否与 OpenAI 完全一致：`[DONE]`、`finish_reason`、`usage` 位置）

@@ -9,26 +9,26 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-const SERVER_:IR = path.dirname(fileURLToPath(import.meta.url));
-const :EFAULT_BASE = 'https://www.workbuddy.ai';
-const :EFAULT_PORT = 8788;
+const SERVER_DIR = path.dirname(fileURLToPath(import.meta.url));
+const DEFAULT_BASE = 'https://www.workbuddy.ai';
+const DEFAULT_PORT = 8788;
 const APP_VERSION = '5.8.4';
-const :EFAULT_APP_VERSION = '5.5.2'; // mock 断言用的 UA 形态
+const DEFAULT_APP_VERSION = '5.5.2'; // mock 断言用的 UA 形态
 const REFRESH_MARGIN_MS = 120_000;
 const CATALOG_TTL_MS = 6 * 60 * 60 * 1000;
-const OWN_COPY_PATH = '::\\dsh\\.workbuddy-auth.json';
-const :EFAULT_CATALOG_PATH = '::\\dsh\\.workbuddy-ai-catalog.json';
-const :EFAULT_SYSTEM_PROMPT = 'You are a helpful assistant.';
+const OWN_COPY_PATH = 'D:\\dsh\\.workbuddy-auth.json';
+const DEFAULT_CATALOG_PATH = 'D:\\dsh\\.workbuddy-ai-catalog.json';
+const DEFAULT_SYSTEM_PROMPT = 'You are a helpful assistant.';
 const CLIENT_UA = 'CLI/2.63.2 CodeBuddy/2.63.2';
 const ENC_MARKER = '$wbEncrypted';
 
-const nowMs = () => :ate.now();
+const nowMs = () => Date.now();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ---------- 配置 ----------
 function resolveConfigPath() {
   if (process.env.WORKBUDDY_PROXY_CONFIG) return process.env.WORKBUDDY_PROXY_CONFIG;
-  const local = path.join(SERVER_:IR, 'config.json');
+  const local = path.join(SERVER_DIR, 'config.json');
   return fs.existsSync(local) ? local : null;
 }
 
@@ -44,18 +44,18 @@ function loadConfig() {
   }
   return {
     _path: p,
-    port: Number.isInteger(cfg.port) ? cfg.port : :EFAULT_PORT,
+    port: Number.isInteger(cfg.port) ? cfg.port : DEFAULT_PORT,
     host: '127.0.0.1',
     bearerToken: typeof cfg.bearerToken === 'string' ? cfg.bearerToken : null,
-    upstreamBase: typeof cfg.upstreamBase === 'string' && cfg.upstreamBase ? cfg.upstreamBase : :EFAULT_BASE,
+    upstreamBase: typeof cfg.upstreamBase === 'string' && cfg.upstreamBase ? cfg.upstreamBase : DEFAULT_BASE,
     appVersion: typeof cfg.appVersion === 'string' && cfg.appVersion ? cfg.appVersion : APP_VERSION,
     productName: typeof cfg.productName === 'string' && cfg.productName ? cfg.productName : 'WorkBuddy AI',
-    catalogPath: typeof cfg.catalogPath === 'string' && cfg.catalogPath ? cfg.catalogPath : :EFAULT_CATALOG_PATH,
+    catalogPath: typeof cfg.catalogPath === 'string' && cfg.catalogPath ? cfg.catalogPath : DEFAULT_CATALOG_PATH,
     credential: cfg.credential && typeof cfg.credential === 'object' ? cfg.credential : null,
   };
 }
 
-function resolveHome:ir() {
+function resolveHomeDir() {
   const h = process.env.DSH_HOME;
   if (h) return h;
   return path.join(os.homedir(), '.dsh');
@@ -81,8 +81,8 @@ function writeStateFile(file, state) {
 }
 
 // ---------- 结构化解密（5.6+ 信封） ----------
-const AA:_PREFIX = Buffer.from('WB-AA:\0', 'ascii');
-const AA:_KEYS = ['WBEV1', 'sym-v1'];
+const AAD_PREFIX = Buffer.from('WB-AAD\0', 'ascii');
+const AAD_KEYS = ['WBEV1', 'sym-v1'];
 
 function u32beLen(str) {
   const b = Buffer.from(str, 'utf8');
@@ -97,10 +97,10 @@ function u32be(n) {
   return b;
 }
 
-// AA:: "WB-AA:\0" | 0x01 | "WBEV1" | "sym-v1" | suite | keyId | 0x02 0x00 0x00
+// AAD: "WB-AAD\0" | 0x01 | "WBEV1" | "sym-v1" | suite | keyId | 0x02 0x00 0x00
 function buildAad(keyId, suite) {
-  const parts = [AA:_PREFIX, Buffer.from([1])];
-  for (const k of AA:_KEYS) parts.push(...u32beLen(k));
+  const parts = [AAD_PREFIX, Buffer.from([1])];
+  for (const k of AAD_KEYS) parts.push(...u32beLen(k));
   parts.push(u32be(suite));
   parts.push(...u32beLen(keyId));
   parts.push(Buffer.from([2]), Buffer.from([0]), Buffer.from([0]));
@@ -163,18 +163,18 @@ function findWorkBuddyExe() {
   } catch {}
   for (const key of names) {
     try {
-      const v = execFileSync('reg.exe', ['query', key, '/v', ':isplayName'], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] });
+      const v = execFileSync('reg.exe', ['query', key, '/v', 'DisplayName'], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] });
       if (!/workbuddy/i.test(v)) continue;
     } catch {
       continue;
     }
-    for (const field of [':isplayIcon', 'InstallLocation']) {
+    for (const field of ['DisplayIcon', 'InstallLocation']) {
       try {
         const v = execFileSync('reg.exe', ['query', key, '/v', field], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] });
         const m = v.match(new RegExp(`${field}\\s+REG_[A-Z_]+\\s+(.+)$`, 'm'));
         if (!m) continue;
         let val = m[1].trim().replace(/^"|"$/g, '');
-        if (field === ':isplayIcon') {
+        if (field === 'DisplayIcon') {
           push(val.split(',')[0].replace(/,$/, ''));
         } else {
           for (const n of ['WorkBuddy.exe', 'WorkBuddyAI.exe', 'WorkBuddy AI.exe']) push(path.join(val, n));
@@ -182,7 +182,7 @@ function findWorkBuddyExe() {
       } catch {}
     }
   }
-  const local = process.env.LOCALAPP:ATA || path.join(os.homedir(), 'App:ata', 'Local');
+  const local = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
   const pf = process.env.ProgramFiles || 'C:\\Program Files';
   const pf86 = process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)';
   for (const c of [
@@ -211,7 +211,7 @@ function safeExec(cmd, args) {
       timeout: 10_000,
       maxBuffer: 1024 * 1024,
       windowsHide: true,
-      env: { ...process.env, ELECTRON_RUN_AS_NO:E: '1' },
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     return { ok: true, stdout };
@@ -221,7 +221,7 @@ function safeExec(cmd, args) {
 }
 
 let protectorKeyCache;
-// 通过 Electron 可执行（ELECTRON_RUN_AS_NO:E）取 atRestSecretKey，再 sha256 得守护密钥
+// 通过 Electron 可执行（ELECTRON_RUN_AS_NODE）取 atRestSecretKey，再 sha256 得守护密钥
 function getProtectorKey() {
   // 测试钩子：允许外部注入已派生的守护密钥，绕过 Electron（仅供离线复算，不影响生产路径）
   if (typeof globalThis.__WB_PROTECTOR_KEY__ === 'string') {
@@ -300,8 +300,8 @@ function decryptEnvelope(value) {
   }
   const protectorKey = getProtectorKey();
   try {
-    const d = crypto.create:ecipheriv('aes-256-gcm', protectorKey, nonce, { authTagLength: 16 });
-    d.setAA:(buildAad(keyId, 1));
+    const d = crypto.createDecipheriv('aes-256-gcm', protectorKey, nonce, { authTagLength: 16 });
+    d.setAAD(buildAad(keyId, 1));
     d.setAuthTag(authTag);
     const plain = Buffer.concat([d.update(ciphertext), d.final()]);
     return plain.toString('utf8');
@@ -315,13 +315,13 @@ function decryptEnvelope(value) {
 
 // ---------- 凭证来源 ----------
 function desktopInfoCandidates() {
-  const local = process.env.LOCALAPP:ATA || path.join(os.homedir(), 'App:ata', 'Local');
-  const roaming = process.env.APP:ATA || path.join(os.homedir(), 'App:ata', 'Roaming');
-  const rel = path.join('CodeBuddyExtension', ':ata', 'Public', 'auth', 'workbuddy-desktop-ai.info');
+  const local = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
+  const roaming = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+  const rel = path.join('CodeBuddyExtension', 'Data', 'Public', 'auth', 'workbuddy-desktop-ai.info');
   return [path.join(local, rel), path.join(roaming, rel)];
 }
 
-// 秒级时间戳若在千年之内（如 :ate.now()/1000 + 30），换算成毫秒后会落到 1970~2023 年的过去，
+// 秒级时间戳若在千年之内（如 Date.now()/1000 + 30），换算成毫秒后会落到 1970~2023 年的过去，
 // 变成「已过期但永远不刷新」的假状态；这里把换算后明显早于当前毫秒时间的值判为不是有效到期时间。
 function normalizeExpiry(raw) {
   const n = Number(raw);
@@ -333,7 +333,7 @@ function normalizeExpiry(raw) {
 function parseIsoOrNumber(v) {
   if (typeof v === 'number') return normalizeExpiry(v);
   if (typeof v === 'string' && v) {
-    const t = :ate.parse(v);
+    const t = Date.parse(v);
     if (Number.isFinite(t)) return t;
     return normalizeExpiry(v);
   }
@@ -341,7 +341,7 @@ function parseIsoOrNumber(v) {
 }
 
 // 解密后的文档：accessToken 可能是明文或信封对象
-function extractTokenFrom:oc(value) {
+function extractTokenFromDoc(value) {
   if (typeof value === 'string') return { kind: 'plaintext', token: value };
   if (isEnvelope(value)) {
     const plain = decryptEnvelope(value);
@@ -402,7 +402,7 @@ function loadCredential(cfg) {
       const doc = r.value;
       const cred = doc.credential || doc.auth || doc;
       if (cred && cred.accessToken) {
-        const t = extractTokenFrom:oc(cred.accessToken);
+        const t = extractTokenFromDoc(cred.accessToken);
         return {
           accessToken: t.token,
           refreshToken: cred.refreshToken || null,
@@ -425,7 +425,7 @@ function loadCredential(cfg) {
     const auth = doc && doc.auth;
     if (!auth || !auth.accessToken) continue;
     const account = doc.account || {};
-    const t = extractTokenFrom:oc(auth.accessToken);
+    const t = extractTokenFromDoc(auth.accessToken);
     const expiresAtMs = normalizeExpiry(auth.expiresAt) ?? normalizeExpiry(auth.expiresIn * 1000);
     return {
       accessToken: t.token,
@@ -445,7 +445,7 @@ function loadCredential(cfg) {
 
 function fatalCredential() {
   process.stderr.write(
-    `${JSON.stringify({ ts: new :ate().toISOString(), event: 'fatal', kind: 'credential-missing', message: 'workbuddy credential not found; sign in to the WorkBuddy desktop app first', hint: 'or set WORKBUDDY_PROXY_TOKEN / WORKBUDDY_AUTH_FILE' })}\n`,
+    `${JSON.stringify({ ts: new Date().toISOString(), event: 'fatal', kind: 'credential-missing', message: 'workbuddy credential not found; sign in to the WorkBuddy desktop app first', hint: 'or set WORKBUDDY_PROXY_TOKEN / WORKBUDDY_AUTH_FILE' })}\n`,
   );
   process.exit(2);
 }
@@ -497,20 +497,20 @@ function chatHeaders(cred, cfg) {
     ...commonHeaders(`${cfg.productName === 'WorkBuddy AI' ? 'WorkBuddy' : 'WorkBuddy'}/${cfg.appVersion} ${cfg.productName}/${cfg.appVersion}`),
     Authorization: `Bearer ${cred.accessToken}`,
     'Content-Type': 'application/json',
-    'X-I:E-Type': 'WorkBuddy',
-    'X-I:E-Name': 'WorkBuddy',
-    'X-I:E-Version': cfg.appVersion,
+    'X-IDE-Type': 'WorkBuddy',
+    'X-IDE-Name': 'WorkBuddy',
+    'X-IDE-Version': cfg.appVersion,
     'X-Product': 'SaaS',
-    'X-Conversation-I:': crypto.randomUUI:(),
-    'X-Conversation-Request-I:': crypto.randomUUI:(),
-    'X-Conversation-Message-I:': crypto.randomUUI:(),
+    'X-Conversation-ID': crypto.randomUUID(),
+    'X-Conversation-Request-ID': crypto.randomUUID(),
+    'X-Conversation-Message-ID': crypto.randomUUID(),
   };
   if (cred.uid) h['X-User-Id'] = cred.uid;
   else h['X-No-User-Id'] = '1';
   if (cred.enterpriseId) h['X-Enterprise-Id'] = cred.enterpriseId;
   else h['X-No-Enterprise-Id'] = '1';
-  if (cred.domain) h['X-:omain'] = cred.domain;
-  else h['X-No-:epartment-Info'] = '1';
+  if (cred.domain) h['X-Domain'] = cred.domain;
+  else h['X-No-Department-Info'] = '1';
   return h;
 }
 
@@ -601,7 +601,7 @@ function transformMessages(messages) {
     out.push(copy);
   }
   if (out.length === 0 || out[0].role !== 'system') {
-    out.unshift({ role: 'system', content: :EFAULT_SYSTEM_PROMPT });
+    out.unshift({ role: 'system', content: DEFAULT_SYSTEM_PROMPT });
   }
   return out;
 }
@@ -626,7 +626,7 @@ function buildUpstreamBody(clientBody, cfg) {
 }
 
 // ---------- 错误分类 ----------
-const CRE:IT_PATTERNS = [
+const CREDIT_PATTERNS = [
   'insufficient credit',
   'no credit',
   'credit exhausted',
@@ -666,7 +666,7 @@ function classify(status, payload) {
   const text = errText(payload);
   if (status === 402) return 'hard_credit';
   if (status === 401 || text.includes('offline user session not found') || text.includes('12153')) return 'session_dead';
-  if (CRE:IT_PATTERNS.some((p) => text.includes(p))) return 'hard_credit';
+  if (CREDIT_PATTERNS.some((p) => text.includes(p))) return 'hard_credit';
   if (status === 429) return 'soft_rate';
   if (status === 404) return 'not_found';
   if (status >= 500) return 'server';
@@ -689,7 +689,7 @@ function readableMessage(payload) {
 
 // ---------- 刷新（单飞） ----------
 let refreshInFlight = null;
-let shutting:own = false;
+let shuttingDown = false;
 
 async function doRefresh() {
   const cred = state.cred;
@@ -784,7 +784,7 @@ function createAccumulator(handlers) {
   let responseId = null;
   let modelName = null;
 
-  const apply:elta = (obj) => {
+  const applyDelta = (obj) => {
     if (!obj || typeof obj !== 'object') return;
     if (obj.id) responseId = obj.id;
     if (obj.model) modelName = obj.model;
@@ -813,8 +813,8 @@ function createAccumulator(handlers) {
 
   return {
     feed(data) {
-      if (data === '[:ONE]') {
-        handlers.on:one?.();
+      if (data === '[DONE]') {
+        handlers.onDone?.();
         return;
       }
       let obj;
@@ -829,14 +829,14 @@ function createAccumulator(handlers) {
         return;
       }
       if (obj && typeof obj === 'object' && obj.data && obj.data.choices) {
-        apply:elta(obj.data);
+        applyDelta(obj.data);
         return;
       }
-      apply:elta(obj);
+      applyDelta(obj);
     },
     result() {
       for (const tc of toolCalls) {
-        if (!tc.id) tc.id = `call_${crypto.randomUUI:().replace(/-/g, '').slice(0, 24)}`;
+        if (!tc.id) tc.id = `call_${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`;
       }
       return { content, toolCalls, finishReason, usage, id: responseId, model: modelName };
     },
@@ -859,7 +859,7 @@ function sendError(res, status, type, message, extra) {
 }
 
 // 任何 handler 都可以安全调用：头已发出（流式已开始吐字节）时不能再写状态行，
-// 只能截断流，否则会抛 ERR_HTTP_HEA:ERS_SENT 盖掉真实错误。
+// 只能截断流，否则会抛 ERR_HTTP_HEADERS_SENT 盖掉真实错误。
 function failSafely(res, status, type, message, extra) {
   if (res.headersSent) {
     try {
@@ -911,7 +911,7 @@ function safeEqual(a, b) {
 
 function logLine(entry) {
   try {
-    process.stdout.write(`${JSON.stringify({ ts: new :ate().toISOString(), ...entry })}\n`);
+    process.stdout.write(`${JSON.stringify({ ts: new Date().toISOString(), ...entry })}\n`);
   } catch {}
 }
 
@@ -1022,7 +1022,7 @@ async function getModels() {
   const fresh = cache && nowMs() - cache.fetchedAtMs < CATALOG_TTL_MS;
   if (fresh) return { models: cache.models, source: 'cache' };
 
-  // 上游抖动很常见（:NS/TLS/短时 5xx）。单次失败就让客户端看到空列表不可接受：
+  // 上游抖动很常见（DNS/TLS/短时 5xx）。单次失败就让客户端看到空列表不可接受：
   // 失败后短暂退避再试一次，两次都失败才回退旧缓存，最后才抛错。
   let lastErr = null;
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -1078,7 +1078,7 @@ async function handleChat(req, res, t0) {
   const wantStream = clientBody?.stream === true;
   const upstreamBody = buildUpstreamBody(clientBody, state.cfg);
   const created = Math.floor(nowMs() / 1000);
-  const responseId = `chatcmpl-${crypto.randomUUI:().replace(/-/g, '')}`;
+  const responseId = `chatcmpl-${crypto.randomUUID().replace(/-/g, '')}`;
   const modelName = typeof clientBody?.model === 'string' && clientBody.model ? clientBody.model : upstreamBody.model;
 
   // 每条消息只共享一次刷新结果；刷新失败一律按 session_dead 处理
@@ -1159,7 +1159,7 @@ async function handleChat(req, res, t0) {
           `data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: {}, finish_reason: choice.finish_reason || 'stop' }] })}\n\n`,
         );
         if (payload.usage) res.write(`data: ${JSON.stringify({ ...base, choices: [], usage: payload.usage })}\n\n`);
-        res.write('data: [:ONE]\n\n');
+        res.write('data: [DONE]\n\n');
         res.end();
         logLine({ method: req.method, path: req.url, status: 200, ms: nowMs() - t0, refreshed, source: state.cred.source });
         return;
@@ -1292,7 +1292,7 @@ async function handleChat(req, res, t0) {
     }
     if (!res.writableEnded) {
       res.write(`data: ${JSON.stringify({ error: { type: 'workbuddy_upstream', message: readableMessage(upstreamEnvelopeError) } })}\n\n`);
-      res.write('data: [:ONE]\n\n');
+      res.write('data: [DONE]\n\n');
       res.end();
     }
     return;
@@ -1317,7 +1317,7 @@ async function handleChat(req, res, t0) {
         })}\n\n`,
       );
       if (out.usage) res.write(`data: ${JSON.stringify({ ...chunkBase(), choices: [], usage: out.usage })}\n\n`);
-      res.write('data: [:ONE]\n\n');
+      res.write('data: [DONE]\n\n');
       res.end();
     }
   } else {
@@ -1459,7 +1459,7 @@ function main() {
   if (!cred) fatalCredential();
   state.cred = cred;
 
-  const home = resolveHome:ir();
+  const home = resolveHomeDir();
   const stateFile = path.join(home, '.workbuddy-proxy.json');
   const prev = readStateFile(stateFile);
 
@@ -1479,7 +1479,7 @@ function main() {
   });
 
   server.on('error', (err) => {
-    process.stderr.write(`${JSON.stringify({ ts: new :ate().toISOString(), event: 'listen-failed', code: err.code || '', message: err.message, pid: process.pid })}\n`);
+    process.stderr.write(`${JSON.stringify({ ts: new Date().toISOString(), event: 'listen-failed', code: err.code || '', message: err.message, pid: process.pid })}\n`);
     process.exit(2);
   });
 
@@ -1491,8 +1491,8 @@ function main() {
   // 收到 SIGTERM/SIGINT 时先断开所有 keep-alive 连接，避免优雅退出被挂起的
   // 空闲连接拖住（Node 会等到连接空闲才关，daemon 场景下会表现为"停不掉"）。
   const shutdown = () => {
-    if (shutting:own) return;
-    shutting:own = true;
+    if (shuttingDown) return;
+    shuttingDown = true;
     server.close(() => process.exit(0));
     server.closeIdleConnections?.();
     setTimeout(() => process.exit(0), 3_000).unref();
@@ -1503,7 +1503,7 @@ function main() {
     const e = err instanceof Error ? err : new Error(String(err));
     process.stderr.write(
       `${JSON.stringify({
-        ts: new :ate().toISOString(),
+        ts: new Date().toISOString(),
         event: 'fatal',
         kind,
         name: e.name,
@@ -1528,10 +1528,10 @@ function main() {
     const next = { ...prev, bearerToken: bearer, port, host: cfg.host, updatedAtMs: nowMs() };
     writeStateFile(stateFile, next);
     if (generated) {
-      process.stderr.write(`${JSON.stringify({ ts: new :ate().toISOString(), event: 'bearer-generated', bearer })}\n`);
+      process.stderr.write(`${JSON.stringify({ ts: new Date().toISOString(), event: 'bearer-generated', bearer })}\n`);
     }
     process.stdout.write(
-      `${JSON.stringify({ ts: new :ate().toISOString(), event: 'listening', host: cfg.host, port, source: cred.source })}\n`,
+      `${JSON.stringify({ ts: new Date().toISOString(), event: 'listening', host: cfg.host, port, source: cred.source })}\n`,
     );
   });
 

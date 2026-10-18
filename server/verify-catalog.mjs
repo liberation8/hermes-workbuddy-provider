@@ -7,7 +7,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const NO:E = process.execPath;
+const NODE = process.execPath;
 const PROXY = path.join(__dirname, 'workbuddy-proxy.mjs');
 
 const results = [];
@@ -70,7 +70,7 @@ async function startProxy(upstreamPort, catalogPath) {
     upstreamBase: `http://127.0.0.1:${upstreamPort}`,
     catalogPath,
   }), 'utf8');
-  const child = spawn(NO:E, [PROXY], {
+  const child = spawn(NODE, [PROXY], {
     env: {
       ...process.env,
       WORKBUDDY_PROXY_CONFIG: cfgPath,
@@ -122,7 +122,7 @@ async function main() {
     fs.writeFileSync(catalogPath, JSON.stringify({
       version: 1,
       entries: {
-        ':': { account: '', source: 'workbuddy-ai:app', fetchedAtMs: :ate.now(), appVersion: '5.5.2', models: [] },
+        ':': { account: '', source: 'workbuddy-ai:app', fetchedAtMs: Date.now(), appVersion: '5.5.2', models: [] },
       },
     }), 'utf8');
     const { port } = await startProxy(upstreamPort, catalogPath);
@@ -147,7 +147,7 @@ async function main() {
     fs.writeFileSync(staleCatalog, JSON.stringify({
       version: 1,
       entries: {
-        ':': { account: '', source: 'workbuddy-ai:app', fetchedAtMs: :ate.now() - 7 * 3600 * 1000, appVersion: '5.5.2', models: [{ id: 'stale-1', name: 'S', maxInputTokens: 10, maxOutputTokens: 1 }] },
+        ':': { account: '', source: 'workbuddy-ai:app', fetchedAtMs: Date.now() - 7 * 3600 * 1000, appVersion: '5.5.2', models: [{ id: 'stale-1', name: 'S', maxInputTokens: 10, maxOutputTokens: 1 }] },
       },
     }), 'utf8');
     modeRef.value = 'empty';

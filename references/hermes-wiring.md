@@ -182,7 +182,7 @@ providers:
 ### 6.1 前台（调试首选，Ctrl+C 停）
 
 ```powershell
-& node D:\Hermes\skills\workbuddy-reverse-proxy\server\workbuddy-proxy.mjs
+& "C:\Program Files\nodejs\node.exe" D:\Hermes\skills\workbuddy-reverse-proxy\server\workbuddy-proxy.mjs
 ```
 
 看到一行 `{"ts":"...","event":"listening","host":"127.0.0.1","port":8788,...}` 即成功。
@@ -205,7 +205,7 @@ providers:
 
 ```powershell
 $log = "$env:TEMP\workbuddy-proxy.log"
-Start-Process -FilePath node `
+Start-Process -FilePath "C:\Program Files\nodejs\node.exe" `
   -ArgumentList "D:\Hermes\skills\workbuddy-reverse-proxy\server\workbuddy-proxy.mjs" `
   -WindowStyle Hidden -RedirectStandardOutput $log -RedirectStandardError "$log.err"
 ```
@@ -287,7 +287,7 @@ context_window, max_tokens, supports_images } ] }`。这里的 `id` 就是 `mode
 ### 7.4 冒烟一发
 
 ```powershell
-$body = @{ model = "<model-id>"; messages = @(@{ role = "user"; content = "ping" }) } | ConvertTo-Json -:epth 5
+$body = @{ model = "<model-id>"; messages = @(@{ role = "user"; content = "ping" }) } | ConvertTo-Json -Depth 5
 Invoke-RestMethod http://127.0.0.1:8788/v1/chat/completions -Method Post `
   -Headers @{ Authorization = "Bearer $b" } -ContentType "application/json" -Body $body
 ```
@@ -308,7 +308,7 @@ Invoke-RestMethod http://127.0.0.1:8788/v1/chat/completions -Method Post `
 诊断脚本定位，再决定处置。
 
 ```powershell
-& node D:\Hermes\skills\workbuddy-reverse-proxy\server\inspect-vault.mjs
+& "C:\Program Files\nodejs\node.exe" D:\Hermes\skills\workbuddy-reverse-proxy\server\inspect-vault.mjs
 ```
 
 **这是只读诊断**：只读取并分类各凭证来源，不打印 token 内容（只输出长度与 4 位前缀）。
@@ -320,9 +320,9 @@ Invoke-RestMethod http://127.0.0.1:8788/v1/chat/completions -Method Post `
 | `name` | 对应来源 |
 |---|---|
 | `env-token` | 环境变量 `WORKBUDDY_PROXY_TOKEN` |
-| `own-copy` | `$DSH_HOME\.workbuddy-auth.json` |
+| `own-copy` | `D:\dsh\.workbuddy-auth.json` |
 | `env-auth-file` | 环境变量 `WORKBUDDY_AUTH_FILE` 指向的文件 |
-| `desktop-app-local` / `desktop-app-roaming` | App 登录态 `%LOCALAPP:ATA%\CodeBuddyExtension\:ata\Public\auth\workbuddy-desktop-ai.info` |
+| `desktop-app-local` / `desktop-app-roaming` | App 登录态 `%LOCALAPPDATA%\CodeBuddyExtension\Data\Public\auth\workbuddy-desktop-ai.info` |
 
 每行的 `kind` 是四种分类之一：
 
@@ -358,10 +358,10 @@ process._linkedBinding("electron_browser_workbuddy_storage").loggerGet()
 
 ```powershell
 $env:WORKBUDDY_PROXY_TOKEN = "<从 WorkBuddy App 内取的 accessToken>"
-& node D:\Hermes\skills\workbuddy-reverse-proxy\server\workbuddy-proxy.mjs
+& "C:\Program Files\nodejs\node.exe" D:\Hermes\skills\workbuddy-reverse-proxy\server\workbuddy-proxy.mjs
 ```
 
-`WORKBUDDY_PROXY_TOKEN` 是反代凭证优先级**最高**的一级（高于 `$DSH_HOME\.workbuddy-auth.json`、
+`WORKBUDDY_PROXY_TOKEN` 是反代凭证优先级**最高**的一级（高于 `D:\dsh\.workbuddy-auth.json`、
 `WORKBUDDY_AUTH_FILE`、App 登录态），所以设了它就不再触碰信封解密路径。取 token 的
 位置视 App 版本而定，本文不臆测具体入口。
 
@@ -391,7 +391,7 @@ $env:WORKBUDDY_PROXY_TOKEN = "<从 WorkBuddy App 内取的 accessToken>"
 | 位置 | 现象 |
 |---|---|
 | Hermes 启动 | 正常启动。没有 provider 插件，就不会有 import 期失败；`custom:workbuddy` 只是发请求时失败 |
-| 发消息 | 连接被拒（`ECONNREFUSE:`），请求失败，提示连不上 `127.0.0.1:8788` |
+| 发消息 | 连接被拒（`ECONNREFUSED`），请求失败，提示连不上 `127.0.0.1:8788` |
 | `/model` | 目录探测失败 → 列表为空或退回静态声明 → 手写 `model.name` 仍可发请求 |
 | context_length | 探测不到 → 退回 `context_length_cache.yaml` → 再退回 `128000` 并告警（`model_metadata.py:282`） |
 | `/healthz` | 连接被拒 |
@@ -402,17 +402,17 @@ $env:WORKBUDDY_PROXY_TOKEN = "<从 WorkBuddy App 内取的 accessToken>"
 | 症状 | 真实原因 | 处置 |
 |---|---|---|
 | `401 invalid_bearer` | Hermes 发的 Bearer 与反代持有的不一致。**反代正常重启会复用状态文件里上次的 bearer**（见 §7.0），所以「重启后就 401」基本不是重启的锅，而是：`.env` 里是旧值 / 改过 `WORKBUDDY_PROXY_BEARER` 或 `config.bearerToken` / 删过状态文件导致重新生成 | 按 §7.0 读当前 bearer（默认在 `%USERPROFILE%\.dsh\.workbuddy-proxy.json`），把 `.env` 的 `WORKBUDDY_API_KEY` 更新成同一个值，重启 Hermes 会话 |
-| `401 workbuddy_session_dead` | 上游登录态失效（App 退出登录 / 被踢 / 刷新失败） | 打开 WorkBuddy 桌面 App 重新登录，再打一次 `/v1/auth/status` 看 `has_refresh_token` 与 `remainingMs`；仍失败则检查 `%LOCALAPP:ATA%\CodeBuddyExtension\:ata\Public\auth\workbuddy-desktop-ai.info` 是否存在 |
+| `401 workbuddy_session_dead` | 上游登录态失效（App 退出登录 / 被踢 / 刷新失败） | 打开 WorkBuddy 桌面 App 重新登录，再打一次 `/v1/auth/status` 看 `has_refresh_token` 与 `remainingMs`；仍失败则检查 `%LOCALAPPDATA%\CodeBuddyExtension\Data\Public\auth\workbuddy-desktop-ai.info` 是否存在 |
 | `402 workbuddy_credit_exhausted` | 订阅额度/积分耗尽 | 去 App 里看额度；这不是接线问题，改配置没用 |
 | `429` | 上游限频 | 降并发/加退避重试；持续则换模型或换时段。Hermes 侧可加大 `providers.workbuddy.rate_limit_delay` |
 | `502 workbuddy_upstream` | 反代→上游链路问题（连不上、返回不可解析、流中断、模型目录不可用） | 看反代 stdout/stderr 日志；核对 `server\config.json` 的 `upstreamBase`；`/v1/models` 也 502 说明是凭证/上游整体不可用而非单个模型 |
 | `502` 且日志写「模型目录不可用」 | `/v1/models` 拉目录失败 | 多半是登录态问题，回到 `401 workbuddy_session_dead` 的处置 |
 | 反代进程启动即退出，stderr `监听失败：EADDRINUSE`，**退出码 `2`** | 端口 8788 被占用（常见于上一次的后台实例没杀干净） | 改 `config.json` 的 `port`（并同步 `config.yaml` 两处 `base_url`），或按 §6.2 的 `Get-NetTCPConnection -LocalPort 8788` 找出并 `Stop-Process` |
-| 反代进程启动即退出，提示找不到凭证 | `WORKBUDDY_PROXY_TOKEN` / `$DSH_HOME\.workbuddy-auth.json` / `WORKBUDDY_AUTH_FILE` / App 登录态四个来源全空，或 App 登录态是解不开的信封加密态 | 登录 App；或直接 `$env:WORKBUDDY_PROXY_TOKEN="<token>"` 绕开信封解密 |
+| 反代进程启动即退出，提示找不到凭证 | `WORKBUDDY_PROXY_TOKEN` / `D:\dsh\.workbuddy-auth.json` / `WORKBUDDY_AUTH_FILE` / App 登录态四个来源全空，或 App 登录态是解不开的信封加密态 | 登录 App；或直接 `$env:WORKBUDDY_PROXY_TOKEN="<token>"` 绕开信封解密 |
 | 请求超时 | 反代在等上游首字节 | 先 `/healthz` 确认进程在；再 `/v1/auth/status` 确认凭证；必要时提高 `providers.workbuddy.request_timeout_seconds`（这是 Hermes 侧配置项，反代 config.json **没有**这个键） |
 | **`502` 且响应体为空**（`content-length: 0`、`connection: close`），反代日志里**没有**对应记录 | **Windows 系统代理回环**：客户端（`httpx`/`openai`/Node）`trust_env` 默认开启，读的是**系统代理**（注册表 `HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings` 的 `ProxyServer`，而不仅是 `HTTP_PROXY` 环境变量），把发往 `127.0.0.1:8788` 的请求交给代理，代理再回环到本机 | **判别**：同一条请求用 `Invoke-WebRequest` / `curl` 成功、用 Python/Node 客户端 502 → 就是它。**修**：在 `D:\Hermes\.env` 追加 `NO_PROXY=127.0.0.1,localhost` 与 `no_proxy=127.0.0.1,localhost`。`ProxyOverride` 里的 `127.*` 只对 WinINET 客户端生效，Python 侧不读，所以必须设 `NO_PROXY` |
 | **回复 `content` 为空字符串**，`finish_reason` 仍是 `stop`，`usage.completion_tokens` 恰好等于请求的 `max_tokens` | 该上游模型先产出思考过程再产出正文，预算过小（如 `max_tokens=64`）时令牌被思考过程吃光；上游不返回 `reasoning_content` 字段 | 提高 `max_tokens` 重试（实测 `200` 即可产出正文）。判定式：`content == "" && completion_tokens == max_tokens` |
-| 诊断（`inspect-vault.mjs`）说「找不到 WorkBuddy 可执行文件」，但反代实际运行正常 | 两者定位主程序的方式不同：反代走 `reg.exe` 查 `:isplayIcon`（`reg.exe` 可用时能找到非默认盘符的安装，如 `D:\Apps\WorkBuddyAI\WorkBuddyAI.exe`）；受限沙箱下 `spawnSync reg.exe` 会 `EPERM`，此时诊断应报「无法探测」而非「找不到」 | 设 `WORKBUDDY_EXE=<主程序完整路径>`，两份脚本都支持，直接跳过全部自动探测 |
+| 诊断（`inspect-vault.mjs`）说「找不到 WorkBuddy 可执行文件」，但反代实际运行正常 | 两者定位主程序的方式不同：反代走 `reg.exe` 查 `DisplayIcon`（`reg.exe` 可用时能找到非默认盘符的安装，如 `D:\wkb\WorkBuddyAI\WorkBuddyAI.exe`）；受限沙箱下 `spawnSync reg.exe` 会 `EPERM`，此时诊断应报「无法探测」而非「找不到」 | 设 `WORKBUDDY_EXE=<主程序完整路径>`，两份脚本都支持，直接跳过全部自动探测 |
 | `内容` 乱码但文件本身正常 | 仅是 PowerShell 控制台按 GBK 解码的显示假象 | 用 UTF-8 方式读取复核（文件是无 BOM 的 UTF-8），不要因此改写文件 |
 
 ## 12. 为什么不用 provider 插件（形态 1）
