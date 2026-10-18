@@ -1,0 +1,12 @@
+node_modules/
+*.log
+.workbuddy-proxy.json
+.workbuddy-auth.json
+.workbuddy-ai-catalog.json
+.workbuddy-ai-version.json
+.env
+config.json
+*.bak
+*.bak-*
+.DS_Store
+Thumbs.db
