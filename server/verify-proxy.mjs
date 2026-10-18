@@ -112,13 +112,27 @@ const buildAadIndep = (keyId, suite) =>
 // 从 provider 源码里抽出真实实现（不复制、不改写），单独成模块后调用
 function parseProviderHelpers() {
   const srcPath = path.join(DIR, 'workbuddy-proxy.mjs');
-  const full = fs.readFileSync(srcPath, 'utf8');
+  // Normalise CRLF: a git checkout on Windows may deliver CRLF, and the brace
+  // scan below matches on bare '\n'.
+  const full = fs.readFileSync(srcPath, 'utf8').replace(/\r\n/g, '\n');
+  // Slice one function by brace depth. Searching for the '\n}\n' that ends a
+  // TOP-LEVEL function breaks as soon as the function takes two or more
+  // arguments: the closing paren of a multi-line signature sits directly before
+  // the '{', so that occurrence is skipped and the scan finds nothing.
   const pick = (name) => {
-    const i = full.indexOf(`function ${name}(`);
-    if (i < 0) throw new Error(`provider 里找不到函数 ${name}`);
-    const end = full.indexOf('\n}\n', i);
-    if (end < 0) throw new Error(`函数 ${name} 截取失败`);
-    return full.slice(i, end + 3);
+    const start = full.indexOf(`function ${name}(`);
+    if (start < 0) throw new Error(`provider 里找不到函数 ${name}`);
+    const open = full.indexOf('{', start);
+    if (open < 0) throw new Error(`函数 ${name} 缺少函数体`);
+    let depth = 0;
+    for (let k = open; k < full.length; k += 1) {
+      if (full[k] === '{') depth += 1;
+      else if (full[k] === '}') {
+        depth -= 1;
+        if (depth === 0) return full.slice(start, k + 1);
+      }
+    }
+    throw new Error(`函数 ${name} 花括号不平衡`);
   };
   const header = [
     'const crypto = await import("node:crypto");',
