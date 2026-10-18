@@ -8,7 +8,7 @@
 [![Node](https://img.shields.io/badge/node-%E2%89%A522-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![零依赖](https://img.shields.io/badge/dependencies-0-brightgreen)](package.json)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Windows-0078:4?logo=windows&logoColor=white)](#-平台支持)
+[![Platform](https://img.shields.io/badge/platform-Windows-0078D4?logo=windows&logoColor=white)](#-平台支持)
 [![Hermes Skill](https://img.shields.io/badge/Hermes-skill-8A2BE2)](SKILL.md)
 [![Tests](https://img.shields.io/badge/tests-17%2F17%20passed-success)](server/verify-proxy.mjs)
 
