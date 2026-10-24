@@ -199,21 +199,33 @@ providers:
 文件里存明文 `bearer`、实际 `port`、`host`（mode 600）。
 
 **端口被占用**：进程会直接退出，`EADDRINUSE` → **退出码 `2`**。换 `config.json` 的
-`port`，或按 6.2 找出占用者。
+`port`，或按 6.2.1 找出占用者。
 
-### 6.2 后台
+### 6.2 后台（推荐：Hermes 状态栏开关）
+
+装好 `workbuddy-switch` 插件后，启停就在 Hermes 状态栏右侧的「反代 开/关」按钮上，
+不需要命令行。等价的手工验证：
 
 ```powershell
-$log = "$env:TEMP\workbuddy-proxy.log"
-Start-Process -FilePath "C:\Program Files\nodejs\node.exe" `
-  -ArgumentList "D:\Hermes\skills\workbuddy-reverse-proxy\server\workbuddy-proxy.mjs" `
-  -WindowStyle Hidden -RedirectStandardOutput $log -RedirectStandardError "$log.err"
+# 需要 X-Hermes-Session-Token，见 web_server.py:368-385
+Invoke-RestMethod -Uri 'http://127.0.0.1:14492/api/plugins/workbuddy-switch/status' `
+  -Headers @{ 'X-Hermes-Session-Token' = $token }
+```
+
+插件契约见 SKILL.md 的「在 Hermes 里开关反代」。
+
+### 6.2.1 后台（无界面时兜底）
+
+```powershell
+cmd /c "D:\Hermes\skills\workbuddy-reverse-proxy\server\autostart.cmd"
 ```
 
 停止（按端口找进程）：
 
 ```powershell
-Get-NetTCPConnection -LocalPort 8788 -State Listen | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }
+# 不要用 Get-NetTCPConnection —— 它漏报跨权限层监听，必须用 netstat 原始输出
+netstat -ano | findstr ":8788" | findstr LISTENING
+taskkill /PID <上面的PID> /T /F
 ```
 
 ### 6.3 端口/配置覆盖
@@ -298,7 +310,7 @@ Invoke-RestMethod http://127.0.0.1:8788/v1/chat/completions -Method Post `
 
 | 现象 | 原因 | 动作 |
 |---|---|---|
-| stderr `监听失败：EADDRINUSE`，退出码 `2` | 端口被占用 | 换 `config.json` 的 `port`，同步改 `config.yaml` 两处 `base_url`；或按 6.2 杀占用者 |
+| stderr `监听失败：EADDRINUSE`，退出码 `2` | 端口被占用 | 换 `config.json` 的 `port`，同步改 `config.yaml` 两处 `base_url`；或按 6.2.1 杀占用者 |
 | 提示「找不到 WorkBuddy 凭证」类信息后退出 | 四个凭证来源全空 | 登录 App，或设 `WORKBUDDY_PROXY_TOKEN` / `WORKBUDDY_AUTH_FILE` |
 | 进程在但 `/v1/models` 502「模型目录不可用」 | 凭证在但上游拒绝/目录拉不下来 | 回到 §7.0 核对 Bearer，再按 §11 的 session_dead 处置 |
 
@@ -377,7 +389,7 @@ $env:WORKBUDDY_PROXY_TOKEN = "<从 WorkBuddy App 内取的 accessToken>"
 
 ## 9. 回滚
 
-1. 停反代（见 6.2）。
+1. 停反代（见 6.2 / 6.2.1）。
 2. `config.yaml`：删掉 `providers.workbuddy` 整段，`model` 恢复原值。
    （改前先 `Copy-Item D:\Hermes\config.yaml D:\Hermes\config.yaml.bak.<时间戳>`。）
 3. `.env`：删掉 `WORKBUDDY_API_KEY=` 那一行（`env_loader.py:488` 是 `override=True`，
@@ -407,7 +419,7 @@ $env:WORKBUDDY_PROXY_TOKEN = "<从 WorkBuddy App 内取的 accessToken>"
 | `429` | 上游限频 | 降并发/加退避重试；持续则换模型或换时段。Hermes 侧可加大 `providers.workbuddy.rate_limit_delay` |
 | `502 workbuddy_upstream` | 反代→上游链路问题（连不上、返回不可解析、流中断、模型目录不可用） | 看反代 stdout/stderr 日志；核对 `server\config.json` 的 `upstreamBase`；`/v1/models` 也 502 说明是凭证/上游整体不可用而非单个模型 |
 | `502` 且日志写「模型目录不可用」 | `/v1/models` 拉目录失败 | 多半是登录态问题，回到 `401 workbuddy_session_dead` 的处置 |
-| 反代进程启动即退出，stderr `监听失败：EADDRINUSE`，**退出码 `2`** | 端口 8788 被占用（常见于上一次的后台实例没杀干净） | 改 `config.json` 的 `port`（并同步 `config.yaml` 两处 `base_url`），或按 §6.2 的 `Get-NetTCPConnection -LocalPort 8788` 找出并 `Stop-Process` |
+| 反代进程启动即退出，stderr `监听失败：EADDRINUSE`，**退出码 `2`** | 端口 8788 被占用（常见于上一次的后台实例没杀干净） | 改 `config.json` 的 `port`（并同步 `config.yaml` 两处 `base_url`），或按 §6.2.1 的 `netstat -ano | findstr ":8788"` 找出 PID 后 `taskkill /PID <pid> /T /F` |
 | 反代进程启动即退出，提示找不到凭证 | `WORKBUDDY_PROXY_TOKEN` / `D:\dsh\.workbuddy-auth.json` / `WORKBUDDY_AUTH_FILE` / App 登录态四个来源全空，或 App 登录态是解不开的信封加密态 | 登录 App；或直接 `$env:WORKBUDDY_PROXY_TOKEN="<token>"` 绕开信封解密 |
 | 请求超时 | 反代在等上游首字节 | 先 `/healthz` 确认进程在；再 `/v1/auth/status` 确认凭证；必要时提高 `providers.workbuddy.request_timeout_seconds`（这是 Hermes 侧配置项，反代 config.json **没有**这个键） |
 | **`502` 且响应体为空**（`content-length: 0`、`connection: close`），反代日志里**没有**对应记录 | **Windows 系统代理回环**：客户端（`httpx`/`openai`/Node）`trust_env` 默认开启，读的是**系统代理**（注册表 `HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings` 的 `ProxyServer`，而不仅是 `HTTP_PROXY` 环境变量），把发往 `127.0.0.1:8788` 的请求交给代理，代理再回环到本机 | **判别**：同一条请求用 `Invoke-WebRequest` / `curl` 成功、用 Python/Node 客户端 502 → 就是它。**修**：在 `D:\Hermes\.env` 追加 `NO_PROXY=127.0.0.1,localhost` 与 `no_proxy=127.0.0.1,localhost`。`ProxyOverride` 里的 `127.*` 只对 WinINET 客户端生效，Python 侧不读，所以必须设 `NO_PROXY` |
