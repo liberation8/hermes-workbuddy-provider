@@ -177,7 +177,7 @@ Get-NetTCPConnection -LocalPort 8788 -State Listen -ErrorAction SilentlyContinue
 # 2. 活着就问候一下（免鉴权）
 Invoke-WebRequest http://127.0.0.1:8788/healthz -TimeoutSec 5 -UseBasicParsing
 
-# 3. 刚死是怎么死的（只在你用自启脚本拉起时有内容）
+# 3. 刚死是怎么死的（自启脚本拉起时才有内容）
 Get-Content D:\dsh\logs\workbuddy-proxy.err.log -Tail 20
 ```
 
@@ -187,25 +187,64 @@ Get-Content D:\dsh\logs\workbuddy-proxy.err.log -Tail 20
 ### 一键拉起（幂等，已在跑就跳过）
 
 ```powershell
-& "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\workbuddy-proxy-autostart.cmd"
+cmd /c "D:\Hermes\skills\workbuddy-reverse-proxy\server\autostart.cmd"
 ```
 
-它做了三件事：检测 8788 是否已监听（已监听则记一行 skip 直接退出）→ 超过
-5 MB 的日志轮转为 `.1` → 后台拉起并把输出写进 `D:\dsh\logs\`。
+它做四件事：`/healthz` 探活（活着就记一行 skip 直接退出）→ 超过 5 MB 的日志
+轮转为 `.1` → 写一个 `run-proxy.cmd` 启动器并后台拉起 → 轮询 `/healthz`
+最多 30 秒确认真的起来了，起不来重试一次。**脚本自己会在 4 秒内返回**，不会
+挂住调用方。
 
-### 让它开机自启（推荐）
+### 让它开机自启
 
-安装：把 `server\autostart.cmd` 复制到用户启动目录
+用**计划任务**，不要用启动文件夹——启动文件夹的父进程是 Explorer，会话结束即
+被回收，这条路实测不通。
 
 ```powershell
-Copy-Item "D:\Hermes\skills\workbuddy-reverse-proxy\server\autostart.cmd" `
-  "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\workbuddy-proxy-autostart.cmd"
+$action  = New-ScheduledTaskAction -Execute "cmd.exe" `
+  -Argument '/c "D:\Hermes\skills\workbuddy-reverse-proxy\server\autostart.cmd"'
+$trigger = New-ScheduledTaskTrigger -AtLogOn
+$trigger.Delay = "PT20S"
+$set = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew `
+  -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) `
+  -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+Register-ScheduledTask -TaskName "WorkBuddyProxy" -Action $action `
+  -Trigger $trigger -Settings $set -RunLevel Limited
 ```
 
-卸载：删除该文件，或运行 `server\uninstall-autostart.cmd`（**不会**停掉正在运行的实例）。
+> **`schtasks /Create` 在这台机器上一律 `Access is denied`**，只能走
+> `Register-ScheduledTask`。另外 `New-ScheduledTaskPrincipal -LogonType` 的枚举
+> 值是 `Interactive`，不是计划任务 XML 里的 `InteractiveToken`。
 
-验证自启是否生效：**下次登录后**先看 `Get-NetTCPConnection -LocalPort 8788`，
-再看 `D:\dsh\logs\autostart.log` 里有没有当天的 `starting workbuddy-proxy`。
+卸载：`Unregister-ScheduledTask -TaskName "WorkBuddyProxy" -Confirm:$false`
+（**不会**停掉正在运行的实例）。
+
+### 2026-10-24 修掉的三个自启缺陷（改脚本前必读）
+
+那天症状是「Hermes 里模型列表空了」。根因不在反代也不在模型——**进程根本不存在**：
+10-18 手动 Ctrl+C 停掉后（`err.log` 只留一个 `^C`），机器一直没重启，10-24 只有一次
+新登录会话，而计划任务那天返回 `0x0` 却什么都没做。三个独立缺陷叠在一起：
+
+1. **存活检查误判**。原来用
+   `netstat -ano | findstr "127.0.0.1:8788" | findstr "LISTENING"` 判断「已在跑」，
+   命中就 `exit /b 0` 什么也不做。那天它判定「已监听」而实际无人监听。而且这台机器
+   上 `netstat` 对跨权限层的监听会漏报（另一次实测），端口表本就不能当存活依据。
+   **现在改成请求 `/healthz`，返回 200 才算活着。**
+2. **日志路径是字面量**。原来写 `set "LOGDIR=$DSH_HOME\logs"`——批处理只展开
+   `%VAR%`，`$DSH_HOME` 是字面量，于是日志被写到**当前工作目录**下的 `$DSH_HOME\logs\`。
+   这就是「任务跑了但日志没动」的真相。**现已改为 `%DSH_HOME%`，未定义时回退
+   `D:\dsh\logs`。**
+3. **前台阻塞**。原来 `"%NODE%" "%PROXY%" 1>> ...` 是前台运行，注释写明当初是为了
+   不丢退出码。代价是：**代理活着，脚本就永不返回**，计划任务永远处于「运行中」，
+   `RestartCount` 和重试逻辑全部失效。**现在改成「写启动器 → 后台拉起 → 轮询
+   `/healthz` 确认」，脚本 4 秒内返回。**
+
+> 后台化的三种写法都实测过，只有第三种能用：
+> - `Win32_Process.Create`：返回 PID，但宿主一退出子进程立刻被回收（实测 rc=255，
+>   node 2.4 秒内消失）。**不可用。**
+> - 启动器里直接前台跑 node：node 活着 cmd 就不退出，等于没解决。
+> - 启动器里 `start "" /b`：node 独立存活，启动器立刻退出。**只有这条能过。**
+>   实测任务 `State=Ready`、`LastTaskResult=0`，而 node 独立在 8788 上服务。
 
 > 两个实现细节，改脚本时别踩：
 > 1. `autostart.cmd` **必须是纯 ASCII**。中文注释在 `.cmd` 里会按 OEM 代码页解析，
@@ -214,6 +253,20 @@ Copy-Item "D:\Hermes\skills\workbuddy-reverse-proxy\server\autostart.cmd" `
 >    运行中的实例持有那个文件的追加句柄，再写会报
 >    `The process cannot access the file because it is being used by another process`。
 
+### 模型列表为空 ≠ 模型没加载
+
+`/v1/models` 需要本地 Bearer，**不带 `Authorization` 头会直接 401 `invalid_bearer`**，
+不是返回空数组。别把 401 误读成「没加载出来」。Bearer 在
+`%DSH_HOME%\.workbuddy-proxy.json` 的 `bearerToken` 字段（64 字符）。
+
+```powershell
+$j = Get-Content "$env:DSH_HOME\.workbuddy-proxy.json" -Raw | ConvertFrom-Json
+$h = @{ Authorization = "Bearer " + $j.bearerToken }
+(Invoke-WebRequest http://127.0.0.1:8788/v1/models -Headers $h -UseBasicParsing).Content
+```
+
+另注：这台机器上 `pwsh` 在受限沙箱里连 `'hello'` 都起不来（exit code `3221225794`），
+所有 shell 探测都要先提权，否则会被误判成「命令失败」。
 ## 故障处置
 
 逐条动作见 `references/hermes-wiring.md` §11，速查：

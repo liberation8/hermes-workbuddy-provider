@@ -4,5 +4,5 @@
   "upstreamBase": "https://www.workbuddy.ai",
   "appVersion": "5.8.4",
   "productName": "WorkBuddy AI",
-  "catalogPath": "::\\dsh\\.workbuddy-ai-catalog.json"
+  "catalogPath": "D:\\dsh\\.workbuddy-ai-catalog.json"
 }
