@@ -49,7 +49,7 @@ WorkBuddy 桌面端把登录态加密存在本地。这个项目把它解出来�
 | **27 个模型** | 含 `glm-5.3`、`deepseek-v4.1-flash`、`kimi-k3`、`gpt-6-astra` 等 |
 | **错误分类** | 402 额度 / 401 掉登录 / 429 限流，各自映射成清晰的错误码 |
 | **可诊断** | 一个命令告诉你「为什么读不到登录态」 |
-| **17 项回归测试** | 自带 mock 上游，不需要真账号也能验证 |
+| **18 项回归测试** | 自带 mock 上游，不需要真账号也能验证 |
 | **状态栏开关** | Hermes 插件把启停做成状态栏按钮，见下文「🔘 Hermes 插件：反代开关」 |
 
 ---
@@ -273,6 +273,21 @@ $env:no_proxy = "127.0.0.1,localhost"
 
 **解法**：`max_tokens` 调到 **200 以上**。
 
+### 冷启动闪一堆看不见的窗口 / 输入法乱切
+
+**症状**：启动反代时冒出一串看不到的窗口，任务栏蓝条跳动，中英文输入法来回切换。
+
+**原因**：旧的 `findWorkBuddyExe()` 对每个卸载键都跑一次 `reg query <key> /v DisplayName`
+（3 + N 个进程，普通机器约 124 个），而且这些 `execFileSync` 都没传 `windowsHide`。
+以 `DETACHED_PROCESS` 拉起的反代没有控制台可继承，Windows 就给**每个** `reg.exe`
+分配一个自己的控制台窗口，并连带创建 `IME` / `MSCTFIME UI` 窗口。实测一次冷启动
+`NEW_WINDOWS 99`。
+
+**修复**（2026-10-24）：每个 root 只跑一次 `reg query <root> /s /f WorkBuddy /d`（共 3 个
+进程），并给所有 `execFileSync` 加 `windowsHide: true`。实测修复后 `NEW_WINDOWS 0`、
+`IME_WINDOWS 0`、`FG_CHANGES 0`，冷启动到 `/healthz` 应答约 290–600 ms。
+`verify-proxy.mjs` 现在会断言这两条，改回逐键循环会直接让 CI 变红。
+
 ### 服务静默消失
 
 反代被外部杀掉不会有任何记录。四重防护：
@@ -296,12 +311,21 @@ node verify-proxy.mjs
 ```
 
 ```
-PASS 17/17  FAIL 0       退出码 0
+PASS 18/18  FAIL 0       退出码 0
 ```
 
 覆盖了：流式 chunk 拼接、tool_calls 分段、请求体改写（`developer`→`system`）、
 四种上游错误映射、Bearer 校验、模型目录缓存、过期刷新单飞、
-以及**信封 AAD 字节级比对 + AES-256-GCM 往返 + 三种篡改必须认证失败**。
+**信封 AAD 字节级比对 + AES-256-GCM 往返 + 三种篡改必须认证失败**，
+以及一条**冷启动守卫**——任何 `execFileSync` 丢了 `windowsHide`、或逐键 `reg query`
+循环被写回来，它都会直接 FAIL。
+
+桌面状态栏按钮有自己的测试套件，用桩化的宿主全局跑，不需要 Electron：
+
+```powershell
+cd desktop-plugins/workbuddy-switch
+node test/run.mjs      # 17 checks passed
+```
 
 ---
 
@@ -322,7 +346,7 @@ hermes-workbuddy-provider/
 ├── server/
 │   ├── workbuddy-proxy.mjs         # 主体：1464 行，零依赖
 │   ├── inspect-vault.mjs           # 凭证库诊断工具
-│   ├── verify-proxy.mjs            # 17 项回归测试
+│   ├── verify-proxy.mjs            # 18 项回归测试
 │   ├── verify-catalog.mjs          # 模型目录校验
 │   ├── mock-upstream.mjs           # 测试用假上游
 │   ├── config.example.json         # 配置样例
@@ -339,7 +363,11 @@ hermes-workbuddy-provider/
 │   ├── tests/standin.mjs           # 自检用的假反代
 │   └── selftest.py                 # 隔离式端到端自检
 └── desktop-plugins/workbuddy-switch/
-    └── plugin.js                   # 状态栏开关按钮
+    ├── plugin.js                   # 状态栏开关按钮
+    └── test/                       # 17 项测试 + 桩化宿主依赖
+        ├── run.mjs
+        ├── harness.mjs
+        └── node_modules/           # @hermes/plugin-sdk + react 桩
 ```
 
 ---

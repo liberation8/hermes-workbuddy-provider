@@ -127,6 +127,37 @@ function b64Exact(str, bytes) {
   return buf;
 }
 
+// reg.exe query <root> /s /f <term> /d  ->  [{ key, values: {name: data} }]
+// /d searches the data, so one call replaces "enumerate products, then ask each
+// one for DisplayName". windowsHide is what keeps the call from flashing a
+// console window: the proxy runs detached with no console to inherit.
+function regMatches(root, term) {
+  let out;
+  try {
+    out = execFileSync('reg.exe', ['query', root, '/s', '/f', term, '/d'], {
+      encoding: 'utf8',
+      timeout: 5000,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+  } catch (err) {
+    // Exit 1 means "0 matches", which is not an error worth propagating.
+    out = typeof err?.stdout === 'string' ? err.stdout : '';
+  }
+  const found = [];
+  let cur = null;
+  for (const line of out.split(/\r?\n/)) {
+    if (/^HKEY_/.test(line)) {
+      cur = { key: line.trim(), values: {} };
+      found.push(cur);
+      continue;
+    }
+    const m = cur && line.match(/^\s+(.+?)\s{2,}REG_[A-Z_]+\s{2,}(.*)$/);
+    if (m) cur.values[m[1].trim()] = m[2];
+  }
+  return found;
+}
+
 function findWorkBuddyExe() {
   const out = [];
   const push = (p) => {
@@ -149,37 +180,22 @@ function findWorkBuddyExe() {
     'HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall',
     'HKLM\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall',
   ];
-  let names = [];
-  try {
-    for (const root of roots) {
-      try {
-        const listing = execFileSync('reg.exe', ['query', root], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] });
-        for (const line of listing.split(/\r?\n/)) {
-          const m = line.match(/^\s*(HKEY_[A-Z_]+\\[^\s].*)$/);
-          if (m && !names.includes(m[1])) names.push(m[1]);
-        }
-      } catch {}
-    }
-  } catch {}
-  for (const key of names) {
-    try {
-      const v = execFileSync('reg.exe', ['query', key, '/v', 'DisplayName'], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] });
-      if (!/workbuddy/i.test(v)) continue;
-    } catch {
-      continue;
-    }
-    for (const field of ['DisplayIcon', 'InstallLocation']) {
-      try {
-        const v = execFileSync('reg.exe', ['query', key, '/v', field], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] });
-        const m = v.match(new RegExp(`${field}\\s+REG_[A-Z_]+\\s+(.+)$`, 'm'));
-        if (!m) continue;
-        let val = m[1].trim().replace(/^"|"$/g, '');
-        if (field === 'DisplayIcon') {
-          push(val.split(',')[0].replace(/,$/, ''));
-        } else {
-          for (const n of ['WorkBuddy.exe', 'WorkBuddyAI.exe', 'WorkBuddy AI.exe']) push(path.join(val, n));
-        }
-      } catch {}
+  // One /s /f search per root instead of "list every product, then query each
+  // one": the old shape created ~124 processes on a normal machine. Every one
+  // of them is a console program, and a detached proxy has no console to
+  // inherit, so Windows gave each its own window - the flash storm users see
+  // on a cold start. windowsHide:true adds CREATE_NO_WINDOW and the loop below
+  // is down to three processes.
+  for (const root of roots) {
+    for (const block of regMatches(root, 'WorkBuddy')) {
+      if (!/workbuddy/i.test(block.values.DisplayName || '')) continue;
+      const icon = block.values.DisplayIcon;
+      if (icon) push(icon.trim().replace(/^"|"$/g, '').split(',')[0].replace(/,$/, ''));
+      const loc = block.values.InstallLocation;
+      if (loc) {
+        const dir = loc.trim().replace(/^"|"$/g, '');
+        for (const n of ['WorkBuddy.exe', 'WorkBuddyAI.exe', 'WorkBuddy AI.exe']) push(path.join(dir, n));
+      }
     }
   }
   const local = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');

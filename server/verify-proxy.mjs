@@ -142,7 +142,7 @@ function parseProviderHelpers() {
     'const { execFileSync } = await import("node:child_process");',
     'let protectorKeyCache;',
   ].join('\n');
-  const body = ['AAD_PREFIX', 'AAD_KEYS', 'ENC_MARKER', 'u32beLen', 'u32be', 'b64Exact', 'findWorkBuddyExe', 'isEnvelope', 'buildAad', 'getProtectorKey', 'decryptEnvelope']
+  const body = ['AAD_PREFIX', 'AAD_KEYS', 'ENC_MARKER', 'u32beLen', 'u32be', 'b64Exact', 'regMatches', 'findWorkBuddyExe', 'isEnvelope', 'buildAad', 'getProtectorKey', 'decryptEnvelope']
     .map((n) => {
       if (n === 'AAD_PREFIX') return 'const AAD_PREFIX = Buffer.from("WB-AAD\\0", "ascii");';
       if (n === 'AAD_KEYS') return 'const AAD_KEYS = ["WBEV1", "sym-v1"];';
@@ -455,7 +455,28 @@ async function main() {
     record('信封解密链路自检', false, err?.message || String(err));
   }
 
-  // 10) inspect-vault：明文来源分类且不泄露 token
+  // 10) 冷启动不弹窗：reg.exe 每次调用都必须 windowsHide，且每个 root 只查一次
+  try {
+    const srcPath = path.join(DIR, 'workbuddy-proxy.mjs');
+    const src = fs.readFileSync(srcPath, 'utf8');
+    const callSites = [];
+    for (let i = src.indexOf('execFileSync('); i >= 0; i = src.indexOf('execFileSync(', i + 1)) {
+      callSites.push(src.slice(i, i + 400));
+    }
+    const noHide = callSites.filter((s) => !s.includes('windowsHide: true')).length;
+    const regSites = callSites.filter((s) => s.includes("'reg.exe'")).length;
+    const perRootSearch = /regMatches\(root, 'WorkBuddy'\)/.test(src);
+    const oldPerKeyProbe = /'\/v',\s*'DisplayName'/.test(src);
+    record(
+      '冷启动不弹窗：子进程全部 windowsHide、reg.exe 只查一次且不再逐键 DisplayName',
+      callSites.length > 0 && noHide === 0 && regSites === 1 && perRootSearch && !oldPerKeyProbe,
+      `sites=${callSites.length} reg=${regSites} noHide=${noHide} perRoot=${perRootSearch} perKey=${oldPerKeyProbe}`,
+    );
+  } catch (err) {
+    record('冷启动不弹窗检查', false, err?.message || String(err));
+  }
+
+  // 11) inspect-vault：明文来源分类且不泄露 token
   const insp = await runInspect(['--json'], {
     ...env,
     WORKBUDDY_PROXY_TOKEN: 'inspect-token-abcdef',

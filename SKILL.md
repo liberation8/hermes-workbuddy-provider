@@ -1,7 +1,7 @@
 ---
 name: workbuddy-reverse-proxy
 description: "Turn the WorkBuddy AI desktop app's login state into a local OpenAI-compatible endpoint (127.0.0.1:8788) and wire it into Hermes as a custom provider. Use when you want Hermes (or any OpenAI client) to run on WorkBuddy AI subscription models without an API key."
-version: 1.2.0
+version: 1.3.0
 author: Hermes Agent
 license: MIT
 platforms: [windows]
@@ -229,6 +229,24 @@ cmd /c "D:\Hermes\skills\workbuddy-reverse-proxy\server\autostart.cmd"
 轮转为 `.1` → 写一个 `run-proxy.cmd` 启动器并后台拉起 → 轮询 `/healthz`
 最多 30 秒确认真的起来了，起不来重试一次。**脚本自己会在 4 秒内返回**，不会
 挂住调用方。
+
+### 冷启动不再弹窗（2026-10-24 修，旧版本会闪窗）
+
+旧版冷启动会「闪一堆看不见的窗口」，任务栏蓝条跳动、输入法中英文来回切。根因不是反代
+自身，而是它探测 WorkBuddy 安装路径时对**每个卸载键**都 `reg query` 一次：
+
+- 旧策略 = 3 次列子键 + 每个子键 1 次 `DisplayName`（这台机器 7 次，普通机器上百次）；
+- 反代被插件以 `DETACHED_PROCESS` 拉起时**没有控制台可继承**，Windows 就给每个
+  `reg.exe` 分配一个自己的控制台窗口，并连带创建 `IME` / `MSCTFIME UI` 窗口
+  ——那正是蓝条跳动与输入法切换的物理来源。实测一次冷启动 `NEW_WINDOWS 99`。
+
+现在：`regMatches(root, term)` 用 `reg query <root> /s /f WorkBuddy /d` 每个 root
+**只查一次**（共 3 个进程），且所有 `execFileSync` 都带 `windowsHide: true`
+（= `CREATE_NO_WINDOW`）。实测修复后同一冷启动 `NEW_WINDOWS 0`、`IME_WINDOWS 0`、
+`FG_CHANGES 0`，冷启动到 `/healthz` 应答约 290–600 ms。
+
+回归测试守着这条：`verify-proxy.mjs` 有一条「子进程全部 windowsHide、reg.exe 只查
+一次且不再逐键 DisplayName」，改回旧写法会直接 FAIL。
 
 ### 在 Hermes 里开关反代（推荐）
 

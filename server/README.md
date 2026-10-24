@@ -8,7 +8,7 @@
 | --- | --- |
 | `workbuddy-proxy.mjs` | 反代服务：`POST /v1/chat/completions`、`GET /v1/models`、`GET /v1/auth/status`、`GET /healthz` |
 | `mock-upstream.mjs` | 假上游（OpenAI 形状 SSE），无网络自测用；第一行打印 `MOCK_PORT=xxxxx` |
-| `verify-proxy.mjs` | 端到端验证：起 mock + provider，跑 17 项断言，退出码 0/1 |
+| `verify-proxy.mjs` | 端到端验证：起 mock + provider，跑 18 项断言，退出码 0/1 |
 | `inspect-vault.mjs` | 只读诊断：报告各凭证来源的分类与解密失败阶段，绝不打印 token |
 | `config.example.json` | 配置样例，首次运行复制成 `config.json` |
 

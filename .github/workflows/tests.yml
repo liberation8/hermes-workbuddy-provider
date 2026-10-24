@@ -31,7 +31,7 @@ jobs:
       - name: Syntax check
         run: node --check workbuddy-proxy.mjs && node --check inspect-vault.mjs && node --check mock-upstream.mjs && node --check verify-proxy.mjs && node --check verify-catalog.mjs
 
-      - name: Regression suite (mock upstream, 17 checks)
+      - name: Regression suite (mock upstream, 18 checks)
         run: node verify-proxy.mjs
 
       - name: Test log
@@ -40,3 +40,27 @@ jobs:
         run: |
           echo "suite exit code is reported by the step above"
           ls -la
+
+  plugin:
+    name: plugin / ${{ matrix.os }} / node ${{ matrix.node }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: [22.x, 24.x]
+    defaults:
+      run:
+        working-directory: desktop-plugins/workbuddy-switch
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Syntax check
+        run: node --check plugin.js
+
+      - name: Desktop plugin suite (stubbed host, 17 checks)
+        run: node test/run.mjs

@@ -271,6 +271,22 @@ $env:no_proxy = "127.0.0.1,localhost"
 
 **Fix**: raise `max_tokens` above **200**.
 
+### A cold start flashes invisible windows / the IME keeps switching
+
+**Symptom**: starting the proxy spawns a burst of windows you never see, the taskbar shows a
+blue flicker, and the Chinese/English IME flips back and forth.
+
+**Cause**: the old `findWorkBuddyExe()` ran `reg query <key> /v DisplayName` once per uninstall
+key (3 + N processes; ~124 on a normal machine) and none of those `execFileSync` calls passed
+`windowsHide`. A proxy started with `DETACHED_PROCESS` has no console to inherit, so Windows
+gave **every** `reg.exe` its own console window, each pulling in `IME` / `MSCTFIME UI` windows.
+Measured on one cold start: `NEW_WINDOWS 99`.
+
+**Fix** (2026-10-24): one `reg query <root> /s /f WorkBuddy /d` per root — 3 processes total —
+and `windowsHide: true` on every `execFileSync`. Measured after the fix: `NEW_WINDOWS 0`,
+`IME_WINDOWS 0`, `FG_CHANGES 0`, cold start to `/healthz` in ~290–600 ms. `verify-proxy.mjs`
+now asserts both properties, so reverting to the per-key loop fails CI.
+
 ### The service disappears silently
 
 A killed proxy leaves no record. Four layers of defence:
@@ -294,12 +310,19 @@ node verify-proxy.mjs
 ```
 
 ```
-PASS 17/17  FAIL 0       exit code 0
+PASS 18/18  FAIL 0       exit code 0
 ```
 
-Covered: streaming chunk assembly, segmented `tool_calls`, request-body rewriting (`developer`→`system`), four upstream error mappings, Bearer validation, model-catalog caching, single-flight refresh on expiry, and **byte-level AAD comparison + AES-256-GCM round-trip + three tampering cases that must fail authentication**.
+Covered: streaming chunk assembly, segmented `tool_calls`, request-body rewriting (`developer`→`system`), four upstream error mappings, Bearer validation, model-catalog caching, single-flight refresh on expiry, **byte-level AAD comparison + AES-256-GCM round-trip + three tampering cases that must fail authentication**, and a **cold-start guard** that fails if any `execFileSync` loses `windowsHide` or the per-key `reg query` loop comes back.
 
-CI runs the same suite on Ubuntu and Windows across Node 22 and 24 — see [`.github/workflows/tests.yml`](.github/workflows/tests.yml).
+The desktop status-bar button has its own suite, run against stubbed host globals so no Electron is needed:
+
+```powershell
+cd desktop-plugins/workbuddy-switch
+node test/run.mjs      # 17 checks passed
+```
+
+CI runs both suites on Ubuntu and Windows across Node 22 and 24 — see [`.github/workflows/tests.yml`](.github/workflows/tests.yml).
 
 ---
 
@@ -319,7 +342,7 @@ hermes-workbuddy-provider/
 ├── server/
 │   ├── workbuddy-proxy.mjs         # the proxy: ~1464 lines, zero dependencies
 │   ├── inspect-vault.mjs           # credential-vault diagnostic tool
-│   ├── verify-proxy.mjs            # 17-check regression suite
+│   ├── verify-proxy.mjs            # 18-check regression suite
 │   ├── verify-catalog.mjs          # model-catalog validation
 │   ├── mock-upstream.mjs           # fake upstream for tests
 │   ├── config.example.json         # sample config
@@ -336,7 +359,11 @@ hermes-workbuddy-provider/
 │   ├── tests/standin.mjs           # fake proxy used by the selftest
 │   └── selftest.py                 # isolated end-to-end check
 └── desktop-plugins/workbuddy-switch/
-    └── plugin.js                   # status-bar on/off button
+    ├── plugin.js                   # status-bar on/off button
+    └── test/                       # 17-check suite + stubbed host deps
+        ├── run.mjs
+        ├── harness.mjs
+        └── node_modules/           # @hermes/plugin-sdk + react stubs
 ```
 
 ---
