@@ -69,7 +69,7 @@ node server\workbuddy-proxy.mjs
 ```
 
 装好 Hermes 插件之后，也可以直接点状态栏的「反代 开/关」按钮
-（见下文「🔘 Hermes 插件：反代开关」）。
+（见下文「🔘 Hermes 插件：反代开关」）。状态栏本身默认收起，先按一次 **`Ctrl+Shift+S`** 打开。
 
 首次运行会：
 
@@ -378,6 +378,10 @@ plugins:
 **装完必须重启 Hermes。** 插件发现发生在模块加载期并缓存在进程内，运行中的后端
 根本没有 `/api/plugins/workbuddy-switch/*` 这些路由。判据：`<HERMES_HOME>/logs/gui.log`
 里出现 `Mounted plugin API routes: /api/plugins/workbuddy-switch/`。
+
+**状态栏默认是收起的。** Hermes 的整条状态栏默认不渲染（`src/store/statusbar-prefs.ts`
+里 `$statusbarVisible` 初值 `false`），所以新装完看不到按钮不是装错了——先按一次
+**`Ctrl+Shift+S`**（动作 `view.toggleStatusbar`）或 ⌘K 搜「切换状态栏」，之后按钮常驻右下角。
 
 > **停止有一个硬限制。** 后端只能 `terminate()` 自己 `Popen` 出来的子进程。由别的
 > 进程（另一个终端、残留的自启脚本）拉起的反代只能靠 `taskkill`，而当 Hermes 宿主

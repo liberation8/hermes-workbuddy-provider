@@ -66,7 +66,8 @@ node server\workbuddy-proxy.mjs
 ```
 
 Or, once the Hermes plugin is installed, click the **反代 开/关** button in the status bar
-(see [Hermes plugin: on/off switch](#-hermes-plugin-onoff-switch)).
+(see [Hermes plugin: on/off switch](#-hermes-plugin-onoff-switch)). The status bar itself is
+opt-in — press **`Ctrl+Shift+S`** once to show it.
 
 On first run it will:
 
@@ -375,6 +376,11 @@ Response body: `ok / running / pid / port / uptimeS / nodePath / proxyScript / l
 **Restart Hermes after installing.** Plugin discovery happens at module load and is cached
 in-process, so a running backend has no `/api/plugins/workbuddy-switch/*` routes at all.
 Check `<HERMES_HOME>/logs/gui.log` for `Mounted plugin API routes: /api/plugins/workbuddy-switch/`.
+
+**The status bar is opt-in.** Hermes ships the whole bar hidden (`$statusbarVisible`
+defaults to `false` in `src/store/statusbar-prefs.ts`), so a fresh install shows no button
+until you press **`Ctrl+Shift+S`** (action `view.toggleStatusbar`) or search "Toggle status
+bar" in the command palette. After that the button stays in the bottom-right corner.
 
 > **Stopping has one hard limit.** The backend can only `terminate()` a `Popen` it created
 > itself. A proxy started by anything else (another terminal, a leftover autostart script)

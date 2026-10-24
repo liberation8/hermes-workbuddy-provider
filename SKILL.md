@@ -1,7 +1,7 @@
 ---
 name: workbuddy-reverse-proxy
 description: "Turn the WorkBuddy AI desktop app's login state into a local OpenAI-compatible endpoint (127.0.0.1:8788) and wire it into Hermes as a custom provider. Use when you want Hermes (or any OpenAI client) to run on WorkBuddy AI subscription models without an API key."
-version: 1.1.0
+version: 1.2.0
 author: Hermes Agent
 license: MIT
 platforms: [windows]
@@ -166,8 +166,8 @@ plugins:
 ```
 
 4. **重启 Hermes**。判据：`D:\Hermes\logs\gui.log` 出现
-   `Mounted plugin API routes: /api/plugins/workbuddy-switch/`，且状态栏右侧出现
-   「反代 开/关」按钮。
+   `Mounted plugin API routes: /api/plugins/workbuddy-switch/`；界面里按
+   **`Ctrl+Shift+S`** 打开状态栏（默认是收起的），右侧出现「反代 开/关」。
 
 > 三个坑：`plugins/<name>/` **必须有 `__init__.py` 和 `plugin.yaml`**，否则插件
 > 目录加载器会把整个目录当成 category 或直接抛 `FileNotFoundError`；
@@ -176,7 +176,8 @@ plugins:
 
 ## 日常操作
 
-- 启动/停止：**点 Hermes 状态栏右侧的「反代 开/关」按钮**（见下文「在 Hermes 里开关反代」）。
+- 启动/停止：**点 Hermes 状态栏右侧的「反代 开/关」按钮**（状态栏默认收起，
+  先按 `Ctrl+Shift+S` 打开；见下文「在 Hermes 里开关反代」）。
   没有界面时用命令行兜底：`cmd /c "D:\Hermes\skills\workbuddy-reverse-proxy\server\autostart.cmd"`
   （幂等，已在跑就跳过）；手工前台跑与按端口 kill 见 `references/hermes-wiring.md` §6。
 - 关注两个会漂的东西：
@@ -281,6 +282,14 @@ Select-String -Path D:\Hermes\logs\gui.log -Pattern "Mounted plugin API routes" 
 ```
 
 出现 `Mounted plugin API routes: /api/plugins/workbuddy-switch/` 才算挂上了。
+
+#### 状态栏默认是关的（第一次看不到按钮不是 bug）
+
+Hermes 桌面端的整条状态栏是**opt-in**的（`store\statusbar-prefs.ts:10`
+`$statusbarVisible` 默认 `false`），关着时整个栏不渲染，按钮自然也不在。
+第一次打开用快捷键 **`Ctrl+Shift+S`**（动作 id `view.toggleStatusbar`，
+`keybinds\actions.ts:115` 的默认值 `mod+shift+s`），或 ⌘K 里搜「切换状态栏」。
+栏出来之后按钮会一直留在右下角，点击即切换。
 
 #### 临时停用 / 卸载
 
