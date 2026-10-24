@@ -47,6 +47,7 @@ The WorkBuddy desktop app keeps your login encrypted on disk. This project decry
 | **Error classification** | 402 quota / 401 dead session / 429 rate limit, each mapped to a clear error type. |
 | **Diagnosable** | One command tells you why your login state cannot be read. |
 | **17 regression tests** | Ships a mock upstream — verifiable without a real account. |
+| **Status-bar switch** | Hermes plugin puts an on/off button in the status bar — see [below](#-hermes-plugin-onoff-switch). |
 
 ---
 
@@ -63,6 +64,9 @@ The WorkBuddy desktop app keeps your login encrypted on disk. This project decry
 ```powershell
 node server\workbuddy-proxy.mjs
 ```
+
+Or, once the Hermes plugin is installed, click the **反代 开/关** button in the status bar
+(see [Hermes plugin: on/off switch](#-hermes-plugin-onoff-switch)).
 
 On first run it will:
 
@@ -268,23 +272,14 @@ $env:no_proxy = "127.0.0.1,localhost"
 
 ### The service disappears silently
 
-A killed proxy leaves no record. Three layers of defence:
+A killed proxy leaves no record. Four layers of defence:
 
-1. **Scheduled task** (recommended) — Task Scheduler is more reliable than the Startup folder and is not reclaimed with its parent process:
+1. **The Hermes status-bar switch** (recommended) — see [Hermes plugin: on/off switch](#-hermes-plugin-onoff-switch) below. One click starts or stops the proxy and the button always shows the live state, so "is it running?" stops being a guess.
+2. **`/healthz` as the only liveness truth** — never judge by the port table. On Windows a `netstat`-based check misses listeners that live in another integrity level, which is exactly how a dead proxy looks alive.
+3. **Exit-code record** — `autostart.cmd` writes every exit `rc` to `workbuddy-proxy.exit.log`
+4. **Structured crash log** — `uncaughtException` / `unhandledRejection` become one-line JSON on `stderr`
 
-   ```powershell
-   $action  = New-ScheduledTaskAction -Execute 'C:\Windows\System32\cmd.exe' -Argument '/c "C:\path\to\server\autostart.cmd"'
-   $trigger = New-ScheduledTaskTrigger -AtLogOn
-   $trigger.Delay = 'PT20S'   # let the WorkBuddy vault unlock first
-   $principal = New-ScheduledTaskPrincipal -UserId "$env:USERNAME" -LogonType Interactive -RunLevel Limited
-   Register-ScheduledTask -TaskPath '\' -TaskName 'WorkBuddyProxy' `
-     -Action $action -Trigger $trigger -Principal $principal -Force
-   ```
-
-2. **Exit-code record** — `autostart.cmd` writes every exit `rc` to `workbuddy-proxy.exit.log`
-3. **Structured crash log** — `uncaughtException` / `unhandledRejection` become one-line JSON on `stderr`
-
-> **Windows-specific gotcha**: `schtasks /Create` fails with `Access is denied` on a non-admin account — you must use `Register-ScheduledTask`. Also, the `LogonType` enum value is `Interactive` (not the XML spelling `InteractiveToken`).
+> A Windows **scheduled task** used to be the recommended autostart. It was dropped: it fires at every logon whether you want the proxy or not, its process cannot be stopped from a lower integrity level, and removing it needs an administrator. The plugin switch has none of those problems.
 
 ---
 
@@ -320,17 +315,72 @@ hermes-workbuddy-provider/
 ├── references/
 │   ├── hermes-wiring.md            # full Hermes wiring priority order + gotchas
 │   └── upstream-protocol.md        # reverse-engineered upstream protocol details
-└── server/
-    ├── workbuddy-proxy.mjs         # the proxy: ~1464 lines, zero dependencies
-    ├── inspect-vault.mjs           # credential-vault diagnostic tool
-    ├── verify-proxy.mjs            # 17-check regression suite
-    ├── verify-catalog.mjs          # model-catalog validation
-    ├── mock-upstream.mjs           # fake upstream for tests
-    ├── config.example.json         # sample config
-    ├── autostart.cmd               # Windows autostart (with exit-code logging)
-    ├── uninstall-autostart.cmd     # remove autostart
-    └── README.md                   # server-level notes
+├── server/
+│   ├── workbuddy-proxy.mjs         # the proxy: ~1464 lines, zero dependencies
+│   ├── inspect-vault.mjs           # credential-vault diagnostic tool
+│   ├── verify-proxy.mjs            # 17-check regression suite
+│   ├── verify-catalog.mjs          # model-catalog validation
+│   ├── mock-upstream.mjs           # fake upstream for tests
+│   ├── config.example.json         # sample config
+│   ├── autostart.cmd               # idempotent launcher (with exit-code logging)
+│   ├── uninstall-autostart.cmd     # remove a legacy scheduled task
+│   └── README.md                   # server-level notes
+├── plugins/workbuddy-switch/       # Hermes backend plugin + web panel
+│   ├── plugin.yaml                 # plugin identity (required by the loader)
+│   ├── __init__.py                 # register() stub (required by the loader)
+│   ├── dashboard/
+│   │   ├── manifest.json           # tab + api declaration
+│   │   ├── plugin_api.py           # /status /start /stop /toggle
+│   │   └── dist/index.js           # web panel bundle
+│   ├── tests/standin.mjs           # fake proxy used by the selftest
+│   └── selftest.py                 # isolated end-to-end check
+└── desktop-plugins/workbuddy-switch/
+    └── plugin.js                   # status-bar on/off button
 ```
+
+---
+
+## 🔘 Hermes plugin: on/off switch
+
+The status-bar switch is the recommended way to control the proxy. It ships in this
+repo under `plugins/` (backend) and `desktop-plugins/` (desktop button); the SKILL.md
+"install step 6" walks through the copy.
+
+**Two directories, both required:**
+
+| Path | Role |
+|---|---|
+| `<HERMES_HOME>/plugins/workbuddy-switch/` | Python backend that owns the process, plus the web panel |
+| `<HERMES_HOME>/desktop-plugins/workbuddy-switch/plugin.js` | the status-bar button |
+
+**Plus a whitelist line** — user plugins are only loaded when listed:
+
+```yaml
+plugins:
+  enabled:
+    - workbuddy-switch
+```
+
+**HTTP contract** under `/api/plugins/workbuddy-switch`, all four endpoints idempotent and always HTTP 200:
+
+| Endpoint | Meaning |
+|---|---|
+| `GET /status` | read-only probe, never mutates |
+| `POST /start` | already running → returns the current state |
+| `POST /stop` | not running → still succeeds |
+| `POST /toggle` | flips, returns the **new** state |
+
+Response body: `ok / running / pid / port / uptimeS / nodePath / proxyScript / logPath / error`.
+
+**Restart Hermes after installing.** Plugin discovery happens at module load and is cached
+in-process, so a running backend has no `/api/plugins/workbuddy-switch/*` routes at all.
+Check `<HERMES_HOME>/logs/gui.log` for `Mounted plugin API routes: /api/plugins/workbuddy-switch/`.
+
+> **Stopping has one hard limit.** The backend can only `terminate()` a `Popen` it created
+> itself. A proxy started by anything else (another terminal, a leftover autostart script)
+> can only be stopped with `taskkill`, which is refused when the Hermes host and the proxy
+> sit at different Windows integrity levels. Then `/stop` returns `ok:false` with
+> `failed=['<pid>: exit=1 错误: 拒绝访问']` in `error` — kill it from an elevated prompt.
 
 ---
 
@@ -356,6 +406,8 @@ Credential detection order (`workbuddy-proxy.mjs`):
 - **No balance endpoint.** WorkBuddy exposes no quota query API; check the app.
 - **The encrypted envelope may change.** Currently `suite=1`, AES-256-GCM; a format change requires re-reverse-engineering.
 - **Non-default install locations** are not auto-detected; set `WORKBUDDY_EXE`.
+- **The switch cannot stop a proxy it did not start.** Only a `Popen` the backend owns can be `terminate()`d; anything else needs `taskkill`, which fails across Windows integrity levels (`ok:false`, `failed=['<pid>: exit=1 …']`).
+- **Installing the plugin needs a Hermes restart.** Backend plugin discovery is cached in-process; until then the `/api/plugins/workbuddy-switch/*` routes do not exist.
 
 ---
 

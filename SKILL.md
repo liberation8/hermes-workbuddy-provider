@@ -1,7 +1,7 @@
 ---
 name: workbuddy-reverse-proxy
 description: "Turn the WorkBuddy AI desktop app's login state into a local OpenAI-compatible endpoint (127.0.0.1:8788) and wire it into Hermes as a custom provider. Use when you want Hermes (or any OpenAI client) to run on WorkBuddy AI subscription models without an API key."
-version: 1.0.0
+version: 1.1.0
 author: Hermes Agent
 license: MIT
 platforms: [windows]
@@ -23,6 +23,8 @@ provider 指向它。
 - 反代服务：`server\workbuddy-proxy.mjs`（Node，监听 `127.0.0.1:8788`）
 - 契约细节：`references/upstream-protocol.md`
 - Hermes 侧接线（唯一的接线主线）：`references/hermes-wiring.md`
+- 启停：Hermes 状态栏右侧的「反代 开/关」按钮（插件 `workbuddy-switch`，见下文
+  「在 Hermes 里开关反代」）；无界面时用 `server\autostart.cmd` 兜底
 
 读法约定：本文命令后面写「预期」的是**输出形状**，不是保证值。若实际输出与预期
 不符，一律按本文「故障处置」→ `references/hermes-wiring.md` §11 故障处置表查。
@@ -33,7 +35,7 @@ provider 指向它。
 - 不写 WorkBuddy 的私有协议细节到 Hermes 里（`X-Conversation-*` 等头全部由反代负责）
 - 不动 `D:\Hermes\hermes-agent`（Hermes 自身源码只读）
 
-## 安装（5 步）
+## 安装（6 步）
 
 ### 1. 落地 server 目录并跑自检
 
@@ -141,17 +143,49 @@ context_window, max_tokens, supports_images} ] }`，`data` 非空。
 **必须给 `key_env` 真值**：Hermes 拿不到 key 时会发送字面量 `no-key-required`，
 反代严格比较必然 401（见 `references/hermes-wiring.md` §2）。
 
+### 6. 装 Hermes 内的开关插件（可选但推荐）
+
+不做这步也能用，只是每次都得敲 `autostart.cmd`。做了就有状态栏按钮。
+
+```powershell
+# 1. 后端插件（管进程）+ Web 面板
+Copy-Item -Recurse -Force <交付物>\workbuddy-switch\plugins\workbuddy-switch D:\Hermes\plugins\
+
+# 2. 桌面端状态栏按钮（注意：只拷 plugin.js，test\ 与桩不需要）
+New-Item -ItemType Directory -Force D:\Hermes\desktop-plugins\workbuddy-switch | Out-Null
+Copy-Item -Force <交付物>\workbuddy-switch\desktop-plugins\workbuddy-switch\plugin.js `
+  D:\Hermes\desktop-plugins\workbuddy-switch\plugin.js
+```
+
+3. 往 `D:\Hermes\config.yaml` **追加**白名单（先备份；已有 `plugins:` 键就只加列表项）：
+
+```yaml
+plugins:
+  enabled:
+    - workbuddy-switch
+```
+
+4. **重启 Hermes**。判据：`D:\Hermes\logs\gui.log` 出现
+   `Mounted plugin API routes: /api/plugins/workbuddy-switch/`，且状态栏右侧出现
+   「反代 开/关」按钮。
+
+> 三个坑：`plugins/<name>/` **必须有 `__init__.py` 和 `plugin.yaml`**，否则插件
+> 目录加载器会把整个目录当成 category 或直接抛 `FileNotFoundError`；
+> `hermes plugins install` 只支持 git URL、装不了本地目录，只能手动拷；
+> 装完不重启一律不生效（后端插件发现是进程内缓存）。
+
 ## 日常操作
 
-- 启动/停止：见第 3 步与 `references/hermes-wiring.md` §6（含后台 `Start-Process`、
-  按端口 kill）。
+- 启动/停止：**点 Hermes 状态栏右侧的「反代 开/关」按钮**（见下文「在 Hermes 里开关反代」）。
+  没有界面时用命令行兜底：`cmd /c "D:\Hermes\skills\workbuddy-reverse-proxy\server\autostart.cmd"`
+  （幂等，已在跑就跳过）；手工前台跑与按端口 kill 见 `references/hermes-wiring.md` §6。
 - 关注两个会漂的东西：
   1. **端口**：反代默认 `8788`；若被占用会以退出码 `2` 结束（EADDRINUSE），
      改 `config.json` 的 `port` 后要同步改 `config.yaml` 里**两处** `base_url`。
   2. **Bearer**：正常重启会**复用**状态文件里上一次的 bearer，不会变；只有在
      显式设置了 `WORKBUDDY_PROXY_BEARER` / `config.bearerToken`、或删掉状态文件时才会
      变。变了就要同步 `.env`。
-- 看日志：前台直接看 stdout/stderr；计划任务/自启拉起的实例看
+- 看日志：前台直接看 stdout/stderr；由插件或 `autostart.cmd` 拉起的实例看
   `D:\dsh\logs\workbuddy-proxy.out.log` 与 `.err.log`。
 - 换模型：`/model` 临时切，或改 `config.yaml` 的 `model.name` 永久切。
 
@@ -161,7 +195,7 @@ context_window, max_tokens, supports_images} ] }`，`data` 非空。
 
 | 消失方式 | 现象 | 判断依据 |
 |---|---|---|
-| 宿主/父进程被清理 | 8788 不再监听 | `Get-NetTCPConnection -LocalPort 8788 -State Listen` 为空 |
+| 宿主/父进程被清理 | 8788 不再监听 | `netstat -ano \| findstr ":8788"` 里没有 LISTENING 行 |
 | 机器休眠/重启 | 重启后全没 | 同上 |
 | 被「清理 node 进程」误伤 | 同上 | 同上 |
 
@@ -171,10 +205,10 @@ context_window, max_tokens, supports_images} ] }`，`data` 非空。
 ### 三步自诊（30 秒）
 
 ```powershell
-# 1. 进程在不在
-Get-NetTCPConnection -LocalPort 8788 -State Listen -ErrorAction SilentlyContinue
+# 1. 进程在不在（用 netstat，不要用 Get-NetTCPConnection —— 它漏报跨权限层监听）
+netstat -ano | findstr ":8788" | findstr LISTENING
 
-# 2. 活着就问候一下（免鉴权）
+# 2. 活着就问候一下（免鉴权，这才是权威判据）
 Invoke-WebRequest http://127.0.0.1:8788/healthz -TimeoutSec 5 -UseBasicParsing
 
 # 3. 刚死是怎么死的（自启脚本拉起时才有内容）
@@ -195,29 +229,64 @@ cmd /c "D:\Hermes\skills\workbuddy-reverse-proxy\server\autostart.cmd"
 最多 30 秒确认真的起来了，起不来重试一次。**脚本自己会在 4 秒内返回**，不会
 挂住调用方。
 
-### 让它开机自启
+### 在 Hermes 里开关反代（推荐）
 
-用**计划任务**，不要用启动文件夹——启动文件夹的父进程是 Explorer，会话结束即
-被回收，这条路实测不通。
+反代做成 Hermes 插件，状态栏右侧常驻一个「反代 开 / 反代 关」按钮，点一下就切换。
+**这是首选方式**：开关的副作用只落在反代进程上，不碰系统级自启。
 
-```powershell
-$action  = New-ScheduledTaskAction -Execute "cmd.exe" `
-  -Argument '/c "D:\Hermes\skills\workbuddy-reverse-proxy\server\autostart.cmd"'
-$trigger = New-ScheduledTaskTrigger -AtLogOn
-$trigger.Delay = "PT20S"
-$set = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew `
-  -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) `
-  -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
-Register-ScheduledTask -TaskName "WorkBuddyProxy" -Action $action `
-  -Trigger $trigger -Settings $set -RunLevel Limited
+> 历史：这里曾经用 Windows **计划任务**做开机自启，实测副作用太大（登录即拉起、
+> 跨权限层停不掉、卸载还得管理员），已改为插件开关。计划任务方案仅作历史保留，
+> 新装不要再建。
+
+#### 它装了什么
+
+两处目录，缺一不可：
+
+| 路径 | 角色 |
+|---|---|
+| `D:\Hermes\plugins\workbuddy-switch\` | Python 后端（`dashboard\plugin_api.py`，管进程）+ Web 面板（`dashboard\dist\index.js`） |
+| `D:\Hermes\desktop-plugins\workbuddy-switch\plugin.js` | 桌面端状态栏按钮 |
+
+外加 `D:\Hermes\config.yaml` 末尾一行白名单——**user 插件必须在 `plugins.enabled` 里才会被加载**：
+
+```yaml
+plugins:
+  enabled:
+    - workbuddy-switch
 ```
 
-> **`schtasks /Create` 在这台机器上一律 `Access is denied`**，只能走
-> `Register-ScheduledTask`。另外 `New-ScheduledTaskPrincipal -LogonType` 的枚举
-> 值是 `Interactive`，不是计划任务 XML 里的 `InteractiveToken`。
+#### 接口契约
 
-卸载：`Unregister-ScheduledTask -TaskName "WorkBuddyProxy" -Confirm:$false`
-（**不会**停掉正在运行的实例）。
+挂在 `/api/plugins/workbuddy-switch` 下，四个端点全部**幂等**、恒返回 HTTP 200：
+
+| 端点 | 语义 |
+|---|---|
+| `GET /status` | 只读探测，不改状态 |
+| `POST /start` | 已在跑就直接返回现状 |
+| `POST /stop` | 没在跑也返回成功 |
+| `POST /toggle` | 翻转后返回**新**状态 |
+
+响应体九个字段：`ok / running / pid / port / uptimeS / nodePath / proxyScript / logPath / error`。
+**存活判定一律以 `GET /healthz` 为准**，不看端口表——这台机器上 `netstat` 会漏报
+跨权限层的监听（见「反代会静默退出」）。
+
+#### 生效条件：必须重启 Hermes
+
+后端在模块加载时就扫描插件目录并**固化在进程内缓存**里（`_get_dashboard_plugins`），
+装完不重启，路由表里根本没有 `/api/plugins/workbuddy-switch/*`。判据：
+
+```powershell
+Select-String -Path D:\Hermes\logs\gui.log -Pattern "Mounted plugin API routes" |
+  Select-Object -Last 5
+```
+
+出现 `Mounted plugin API routes: /api/plugins/workbuddy-switch/` 才算挂上了。
+
+#### 临时停用 / 卸载
+
+- 临时停用：把 `config.yaml` 里 `workbuddy-switch` 从 `plugins.enabled` 删掉，重启 Hermes。
+- 彻底卸载：删上面两个目录 + 那行白名单，重启。
+- **插件开关关掉的只是反代进程**，Hermes 的 provider 配置不动——关掉后请求失败是预期行为。
 
 ### 2026-10-24 修掉的三个自启缺陷（改脚本前必读）
 
@@ -345,3 +414,10 @@ no_proxy=127.0.0.1,localhost
   `DisplayIcon` 定位；若 `reg.exe` 不可用（受限沙箱、组策略），自动探测会失败，
   设环境变量 `WORKBUDDY_EXE=<可执行文件完整路径>` 直接指定即可。
 - Windows 系统代理会拦截出站请求造成空的 502，见「故障处置 → 系统代理回环」。
+- **插件停不掉「不是它自己拉起的」反代**。`plugin_api.py` 只能对自有 `Popen`
+  句柄 `terminate()`；进程若是别的进程（另一个终端、旧的自启脚本）拉起的，就只剩
+  `taskkill` 一条路，而 Hermes 宿主与反代若处在不同完整性层，`taskkill` 会被
+  「拒绝访问」。此时 `/stop` 返回 `ok:false` 且 `error` 里写明
+  `failed=['<pid>: exit=1 错误: 拒绝访问']` —— 用管理员终端 `taskkill /PID <pid> /T /F`，
+  或先关掉那个实例再从插件里启一个「自己的」。
+- 插件装完**必须重启 Hermes**才生效（后端插件发现是进程内缓存），见「在 Hermes 里开关反代 → 生效条件」。

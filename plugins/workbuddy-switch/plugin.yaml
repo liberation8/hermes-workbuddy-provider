@@ -1,0 +1,5 @@
+name: workbuddy-switch
+version: 0.1.0
+description: Start/stop the local workbuddy reverse proxy from the Hermes dashboard.
+author: workbuddy-switch
+kind: standalone

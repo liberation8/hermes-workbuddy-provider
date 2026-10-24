@@ -50,6 +50,7 @@ WorkBuddy 桌面端把登录态加密存在本地。这个项目把它解出来�
 | **错误分类** | 402 额度 / 401 掉登录 / 429 限流，各自映射成清晰的错误码 |
 | **可诊断** | 一个命令告诉你「为什么读不到登录态」 |
 | **17 项回归测试** | 自带 mock 上游，不需要真账号也能验证 |
+| **状态栏开关** | Hermes 插件把启停做成状态栏按钮，见下文「🔘 Hermes 插件：反代开关」 |
 
 ---
 
@@ -66,6 +67,9 @@ WorkBuddy 桌面端把登录态加密存在本地。这个项目把它解出来�
 ```powershell
 node server\workbuddy-proxy.mjs
 ```
+
+装好 Hermes 插件之后，也可以直接点状态栏的「反代 开/关」按钮
+（见下文「🔘 Hermes 插件：反代开关」）。
 
 首次运行会：
 
@@ -271,23 +275,14 @@ $env:no_proxy = "127.0.0.1,localhost"
 
 ### 服务静默消失
 
-反代被外部杀掉不会有任何记录。三重防护：
+反代被外部杀掉不会有任何记录。四重防护：
 
-1. **计划任务托管**（推荐）——由 Task Scheduler 托管比启动文件夹可靠，不会随父进程被回收：
+1. **Hermes 状态栏开关**（推荐）——见下文「🔘 Hermes 插件：反代开关」。点一下即启停，按钮上永远显示真实状态，「它到底在不在跑」不再是靠猜。
+2. **只认 `/healthz`**——不要用端口表判断存活。Windows 上 `netstat` 会漏报另一个完整性层里的监听，死进程看起来像活着的。
+3. **退出码记录**——`autostart.cmd` 把每次退出的 `rc` 写进 `workbuddy-proxy.exit.log`
+4. **结构化崩溃日志**——`uncaughtException` / `unhandledRejection` 写成单行 JSON 到 `stderr`
 
-   ```powershell
-   $action  = New-ScheduledTaskAction -Execute 'C:\Windows\System32\cmd.exe' -Argument '/c "D:\Hermes\skills\workbuddy-reverse-proxy\server\autostart.cmd"'
-   $trigger = New-ScheduledTaskTrigger -AtLogOn
-   $trigger.Delay = 'PT20S'   # 等 WorkBuddy 凭证库解锁
-   $principal = New-ScheduledTaskPrincipal -UserId "$env:USERNAME" -LogonType Interactive -RunLevel Limited
-   Register-ScheduledTask -TaskPath '\' -TaskName 'WorkBuddyProxy' ^
-     -Action $action -Trigger $trigger -Principal $principal -Force
-   ```
-
-2. **退出码记录**——`autostart.cmd` 把每次退出的 `rc` 写进 `workbuddy-proxy.exit.log`
-3. **结构化崩溃日志**——`uncaughtException` / `unhandledRejection` 写成单行 JSON 到 `stderr`
-
-> **Windows 专属坑**：`schtasks /Create` 在非管理员账户下会直接 `Access is denied`，必须用 `Register-ScheduledTask`。另外 `LogonType` 的枚举值是 `Interactive`（不是 XML 里的 `InteractiveToken`）。
+> 早期推荐过用 Windows **计划任务**做开机自启，现已弃用：每次登录都会拉起（不管你用不用）、跨完整性层停不掉、卸载还要管理员权限。插件开关没有这三个问题。
 
 ---
 
@@ -324,17 +319,70 @@ hermes-workbuddy-provider/
 ├── references/
 │   ├── hermes-wiring.md            # Hermes 接入的完整优先级与踩坑
 │   └── upstream-protocol.md        # 逆向出的上游协议细节
-└── server/
-    ├── workbuddy-proxy.mjs         # 主体：1464 行，零依赖
-    ├── inspect-vault.mjs           # 凭证库诊断工具
-    ├── verify-proxy.mjs            # 17 项回归测试
-    ├── verify-catalog.mjs          # 模型目录校验
-    ├── mock-upstream.mjs           # 测试用假上游
-    ├── config.example.json         # 配置样例
-    ├── autostart.cmd               # Windows 开机自启（带退出码记录）
-    ├── uninstall-autostart.cmd     # 卸载自启
-    └── README.md                   # server 内部说明
+├── server/
+│   ├── workbuddy-proxy.mjs         # 主体：1464 行，零依赖
+│   ├── inspect-vault.mjs           # 凭证库诊断工具
+│   ├── verify-proxy.mjs            # 17 项回归测试
+│   ├── verify-catalog.mjs          # 模型目录校验
+│   ├── mock-upstream.mjs           # 测试用假上游
+│   ├── config.example.json         # 配置样例
+│   ├── autostart.cmd               # 幂等启动器（带退出码记录）
+│   ├── uninstall-autostart.cmd     # 清理历史计划任务
+│   └── README.md                   # server 内部说明
+├── plugins/workbuddy-switch/       # Hermes 后端插件 + Web 面板
+│   ├── plugin.yaml                 # 插件身份（加载器必需）
+│   ├── __init__.py                 # register() 占位（加载器必需）
+│   ├── dashboard/
+│   │   ├── manifest.json           # tab 与 api 声明
+│   │   ├── plugin_api.py           # /status /start /stop /toggle
+│   │   └── dist/index.js           # Web 面板 bundle
+│   ├── tests/standin.mjs           # 自检用的假反代
+│   └── selftest.py                 # 隔离式端到端自检
+└── desktop-plugins/workbuddy-switch/
+    └── plugin.js                   # 状态栏开关按钮
 ```
+
+---
+
+## 🔘 Hermes 插件：反代开关
+
+状态栏开关是控制反代的首选方式。本仓库同时提供后端插件（`plugins/`）与桌面按钮
+（`desktop-plugins/`），安装见 SKILL.md 的「安装 → 第 6 步」。
+
+**两个目录，缺一不可：**
+
+| 路径 | 角色 |
+|---|---|
+| `<HERMES_HOME>/plugins/workbuddy-switch/` | Python 后端（真正管进程）+ Web 面板 |
+| `<HERMES_HOME>/desktop-plugins/workbuddy-switch/plugin.js` | 状态栏按钮 |
+
+**外加一行白名单**——user 插件必须列入才会被加载：
+
+```yaml
+plugins:
+  enabled:
+    - workbuddy-switch
+```
+
+**HTTP 契约**挂在 `/api/plugins/workbuddy-switch`，四个端点全部幂等、恒返回 200：
+
+| 端点 | 语义 |
+|---|---|
+| `GET /status` | 只读探测，不改状态 |
+| `POST /start` | 已在跑 → 返回现状 |
+| `POST /stop` | 没在跑 → 依然成功 |
+| `POST /toggle` | 翻转后返回**新**状态 |
+
+响应体九个字段：`ok / running / pid / port / uptimeS / nodePath / proxyScript / logPath / error`。
+
+**装完必须重启 Hermes。** 插件发现发生在模块加载期并缓存在进程内，运行中的后端
+根本没有 `/api/plugins/workbuddy-switch/*` 这些路由。判据：`<HERMES_HOME>/logs/gui.log`
+里出现 `Mounted plugin API routes: /api/plugins/workbuddy-switch/`。
+
+> **停止有一个硬限制。** 后端只能 `terminate()` 自己 `Popen` 出来的子进程。由别的
+> 进程（另一个终端、残留的自启脚本）拉起的反代只能靠 `taskkill`，而当 Hermes 宿主
+> 与反代处于不同 Windows 完整性层时 `taskkill` 会被「拒绝访问」。此时 `/stop` 返回
+> `ok:false`，`error` 里写着 `failed=['<pid>: exit=1 错误: 拒绝访问']`——用管理员终端杀。
 
 ---
 
@@ -360,6 +408,8 @@ hermes-workbuddy-provider/
 - **额度接口读不到余额**。WorkBuddy 没有开放额度查询接口，只能去 App 看。
 - **加密信封格式可能变**。当前 `suite=1`、AES-256-GCM；上游改格式后需要重新逆向。
 - **非默认盘符的安装路径**未被自动探测，需要 `WORKBUDDY_EXE` 环境变量。
+- **插件停不掉「不是它自己拉起的」反代**。只有后端自己 `Popen` 的子进程能被 `terminate()`；其他来源的进程只能靠 `taskkill`，跨 Windows 完整性层时会失败（`ok:false`、`failed=['<pid>: exit=1 …']`）。
+- **装插件必须重启 Hermes**。后端插件发现是进程内缓存，重启前 `/api/plugins/workbuddy-switch/*` 这些路由根本不存在。
 
 ---
 

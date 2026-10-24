@@ -1,0 +1,14 @@
+{
+  "name": "workbuddy-switch",
+  "label": "WorkBuddy Switch",
+  "description": "Start and stop the local workbuddy reverse proxy (127.0.0.1:8788).",
+  "icon": "Power",
+  "version": "0.1.0",
+  "tab": {
+    "path": "/workbuddy-switch",
+    "position": "end"
+  },
+  "entry": "dist/index.js",
+  "css": null,
+  "api": "plugin_api.py"
+}
