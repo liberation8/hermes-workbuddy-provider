@@ -11,6 +11,7 @@ function fail(res, status, code, zh) {
 }
 
 function badRequest(res, reason) {
+  // 与真实网关同形：HTTP 400 + code 11128 + 中文「请求被拦截，请重新发送」。
   fail(res, 400, 11128, `请求被拦截，请重新发送（${reason}）`);
 }
 
@@ -88,10 +89,10 @@ function assertUpstreamBody(body) {
   if (msgs.some((m) => m && m.role === 'developer')) return 'developer-role';
   if (body.reasoning_effort === 'off') return 'reasoning-effort-off';
   if (body.__expectNoTools && (body.tools || body.functions)) return 'tools-not-stripped';
-  // 反代不许凭空补一条 system：那句固定的 'You are a helpful assistant.' 是全网唯一指纹。
-  if (msgs.some((m) => m && typeof m.content === 'string' && m.content.includes('You are a helpful assistant.'))) {
-    return 'default-system-prompt';
-  }
+  // 国际网关的真实要求：首条必须是 system，否则 400 / 11128「first message is not system prompt」。
+  // 真实上游就是这么拒的（官方客户端因此在国际区补一条），mock 必须照样拒，
+  // 否则「漏补 system」这种线上必挂的回归在自测里是绿的。
+  if (msgs.length > 0 && msgs[0]?.role !== 'system') return 'first-not-system';
   return null;
 }
 
@@ -201,6 +202,13 @@ const server = http.createServer(async (req, res) => {
     if (userText.includes('[BAN]')) {
       const b = JSON.stringify({ code: 11140, msg: 'account banned', displayMsg: { zh: '账号已被封禁' } });
       res.writeHead(403, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(b) });
+      res.end(b);
+      return;
+    }
+    if (userText.includes('[CHAN]')) {
+      // 网关拦截请求形状：真实上游的 400 + 11128，displayMsg.zh = 「请求被拦截，请重新发送」
+      const b = JSON.stringify({ code: 11128, msg: 'first message is not system prompt', displayMsg: { zh: '请求被拦截，请重新发送' } });
+      res.writeHead(400, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(b) });
       res.end(b);
       return;
     }

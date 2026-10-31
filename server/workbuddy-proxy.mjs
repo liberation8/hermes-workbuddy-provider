@@ -27,6 +27,12 @@ const ENC_MARKER = '$wbEncrypted';
 const GLOBAL_ORIGIN = 'https://www.workbuddy.ai';
 const CN_ORIGIN = 'https://www.codebuddy.cn';
 
+// 国际网关要求首条消息必须是 system，否则一律 400 / code 11128
+// 「first message is not system prompt」。官方客户端同样会补这一条
+// （host-heartbeat prepareInternationalChatBody 与 INTERNATIONAL_SYSTEM_PROMPT），
+// 所以它既不是指纹、也不是可省的一步：漏了它每个请求都会被上游拒掉。
+const INTERNATIONAL_SYSTEM_PROMPT = 'You are a helpful assistant.';
+
 // 节流默认值：上游是「订阅账号」，短时高频是封号的头号诱因（实测曾被 25 次/分打到 403）。
 const DEFAULT_MIN_INTERVAL_MS = 800;
 const DEFAULT_MAX_PER_SEC = 2;
@@ -656,7 +662,7 @@ function normalizeToolChoice(tc) {
   return { present: false };
 }
 
-function transformMessages(messages) {
+function transformMessages(messages, origin) {
   const out = [];
   for (const m of Array.isArray(messages) ? messages : []) {
     if (!m || typeof m !== 'object') continue;
@@ -664,15 +670,19 @@ function transformMessages(messages) {
     if (copy.role === 'developer') copy.role = 'system';
     out.push(copy);
   }
-  // 不再补 'You are a helpful assistant.'：官方客户端不会凭空插一条 system，
-  // 这条固定前缀是全网唯一的指纹（同一句话从同一出口发给上游）。客户端没给就不发。
+  // 国际网关要求首条是 system（400/11128 "first message is not system prompt"）。
+  // 官方客户端在国际区同样补这一条，所以补它不是伪造指纹，而是必须满足的前置条件；
+  // 国区网关没有这条要求，照官方做法只在 global 区补。
+  if (origin === GLOBAL_ORIGIN && out.length > 0 && out[0]?.role !== 'system') {
+    out.unshift({ role: 'system', content: INTERNATIONAL_SYSTEM_PROMPT });
+  }
   return out;
 }
 
-function buildUpstreamBody(clientBody, cfg) {
+function buildUpstreamBody(clientBody, cfg, cred) {
   const body = { ...clientBody };
   body.stream = true;
-  body.messages = transformMessages(body.messages);
+  body.messages = transformMessages(body.messages, originOf(cred, cfg));
   if (body.reasoning_effort === 'off') delete body.reasoning_effort;
   const tc = normalizeToolChoice(body.tool_choice);
   if (!tc.present) {
@@ -725,15 +735,18 @@ function errText(payload) {
   return parts.filter((x) => typeof x === 'string' && x).join(' | ').toLowerCase();
 }
 
-// 封禁/风控类错误码。11128（channel blocked）与 11140（account banned）来自上游网关的
-// 业务码而非 HTTP 语义，403 本身在 classify 里原本只会落到 'client'，等于把「号被封了」
-// 当成「请求写错了」，日志里也看不出区别。
-const BAN_CODES = [11140, 11128];
+// 封禁/风控类错误码。11140 才是真封号；11128 是「请求被网关拦下」的业务码
+// （官方注释实测记录：国际区 = 首条不是 system prompt，国区 = 用了 developer 角色，
+// 两者都是请求形状问题，与账号状态无关）。把 11128 归成封号会让一个可以修好的
+// 请求形状错误伪装成不可恢复的终态，所以它单独一类。
+const BAN_CODES = [11140];
+const CHANNEL_BLOCKED_CODES = [11128];
 const BAN_PATTERNS = ['account banned', 'account is banned', 'account suspended', 'account disabled', 'channel blocked', '访问受限', '账号被封', '账户被封', '账号异常'];
 
 function classify(status, payload) {
   const text = errText(payload);
   const code = payload && typeof payload === 'object' ? Number(payload.code) : NaN;
+  if (CHANNEL_BLOCKED_CODES.includes(code)) return 'channel_blocked';
   if (BAN_CODES.includes(code)) return 'account_banned';
   if (BAN_PATTERNS.some((p) => text.includes(p))) return 'account_banned';
   if (status === 402) return 'hard_credit';
@@ -1177,6 +1190,14 @@ function noteUpstreamOutcome(status, payload) {
     logLine({ event: 'throttle_backoff', kind, ms: throttle.backoffMs, reason: `http_${status}` });
     return kind;
   }
+  if (kind === 'channel_blocked') {
+    // 请求形状错误，重发同样的请求毫无意义，也不该触发封号级的安静期：
+    // 只做一次短退避，把日志留在案发现场，等调用方改请求。
+    throttle.backoffMs = 0;
+    throttle.backoffUntil = 0;
+    logLine({ event: 'channel_blocked', kind, ms: 0, reason: 'request_shape' });
+    return kind;
+  }
   if (status < 400) {
     throttle.backoffMs = 0;
     throttle.backoffUntil = 0;
@@ -1200,9 +1221,18 @@ function upstreamErrorToClient(res, status, payload, extra) {
     sendError(res, 429, 'workbuddy_rate_limited', message, extra);
     return;
   }
+  if (kind === 'channel_blocked') {
+    // 网关拦下请求形状（国际区首条非 system、国区用了 developer 角色）。这是可以修好的
+    // 客户端错误，不是封号：状态码按 400 回，让调用方去改请求，而不是当成终态放弃。
+    sendError(res, 400, 'workbuddy_channel_blocked', `${message}（上游网关拦截请求形状：国际区要求首条消息为 system，国区不接受 developer 角色）`, {
+      ...(extra || {}),
+      upstream_code: payload?.code != null ? payload.code : undefined,
+    });
+    return;
+  }
   if (kind === 'account_banned') {
     // 403 保留原状态码：客户端（Hermes）把它当不可重试的终态，不再重试放大风控。
-    sendError(res, 403, 'workbuddy_account_banned', `${message}（账号被上游风控/封禁，别再重试）`, {
+    sendError(res, 403, 'workbuddy_account_banned', `${message}（账号被上游封禁，别再重试）`, {
       ...(extra || {}),
       upstream_code: payload?.code != null ? payload.code : undefined,
     });
@@ -1228,7 +1258,7 @@ async function handleChat(req, res, t0) {
     return;
   }
   const wantStream = clientBody?.stream === true;
-  const upstreamBody = buildUpstreamBody(clientBody, state.cfg);
+  const upstreamBody = buildUpstreamBody(clientBody, state.cfg, state.cred);
   const created = Math.floor(nowMs() / 1000);
   const responseId = `chatcmpl-${crypto.randomUUID().replace(/-/g, '')}`;
   const modelName = typeof clientBody?.model === 'string' && clientBody.model ? clientBody.model : upstreamBody.model;

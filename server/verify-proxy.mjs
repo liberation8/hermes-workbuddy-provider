@@ -482,18 +482,19 @@ async function main() {
     record('冷启动不弹窗检查', false, err?.message || String(err));
   }
 
-  // 11) 指纹统一：Origin/Referer 指向产品站点、UA 与官方 chatUserAgent 同形、不注入默认 system
+  // 11) 指纹统一 + 国际网关的 system 前置条件：Origin/Referer 指向产品站点、UA 与官方同形、
+  //     首条消息必须是 system（漏了这条真实上游会 400/11128，mock 同样拒）
   try {
     const mh = await json(mockPort, 'GET', '/__state');
     const h = mh.json?.lastHeaders || {};
     const originOk = h.origin === 'https://www.workbuddy.ai' && h.referer === 'https://www.workbuddy.ai/';
     const uaOk = /^WorkBuddy\/[\d.]+ WorkBuddy AI\/[\d.]+$/.test(String(h.userAgent || ''));
     const msgs = mh.json?.lastMessages || [];
-    const noInjectedSystem = !msgs.some((m) => typeof m.content === 'string' && m.content.includes('You are a helpful assistant.'));
+    const firstIsSystem = msgs.length > 0 && msgs[0]?.role === 'system';
     record(
-      '指纹统一：Origin/Referer 指向产品站点、UA 同官方、不注入默认 system',
-      originOk && uaOk && noInjectedSystem,
-      `origin=${h.origin} referer=${h.referer} ua=${h.userAgent} injected=${!noInjectedSystem}`,
+      '指纹统一 + 首条为 system：Origin/Referer 指向产品站点、UA 同官方、system 前置条件满足',
+      originOk && uaOk && firstIsSystem,
+      `origin=${h.origin} referer=${h.referer} ua=${h.userAgent} first=${msgs[0]?.role}`,
     );
   } catch (err) {
     record('指纹统一检查', false, err?.message || String(err));
@@ -515,6 +516,26 @@ async function main() {
     record('封禁后自动退避且日志记录 upstream_code/kind', backoffLogged && kindLogged, `backoff=${backoffLogged} kind=${kindLogged}`);
   } catch (err) {
     record('封禁码分类检查', false, err?.message || String(err));
+  }
+
+  // 12b) 11128 不是封号：网关拦请求形状时必须是 400 workbuddy_channel_blocked，
+  //      不能伪装成不可恢复的 account_banned（2026-10-31 实测踩过：把 11128 归成封号，
+  //      于是一个「首条缺 system」的请求形状错误看起来像账号被永久封禁）
+  try {
+    const chan = await json(proxyPort, 'POST', '/v1/chat/completions', {
+      headers: H,
+      body: JSON.stringify({ model: 'mock-balanced', messages: [{ role: 'user', content: '[CHAN]' }] }),
+    });
+    const chanOk =
+      chan.status === 400 &&
+      chan.json?.error?.type === 'workbuddy_channel_blocked' &&
+      chan.json?.error?.upstream_code === 11128;
+    record('11128 → 400 workbuddy_channel_blocked（不是 account_banned）', chanOk, `${chan.status} ${chan.text.slice(0, 240)}`);
+    const logText2 = fs.readFileSync(proxy.__logPath, 'utf8');
+    const chanLogged = /"kind":"channel_blocked"/.test(logText2) && /"upstream_code":11128/.test(logText2);
+    record('11128 归类进日志且不触发封号级退避', chanLogged, `logged=${chanLogged}`);
+  } catch (err) {
+    record('11128 分类检查', false, err?.message || String(err));
   }
 
   // 13) 节流：连发 4 个请求，最小间隔与每秒窗口必须生效

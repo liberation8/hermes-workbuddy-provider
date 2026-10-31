@@ -1,7 +1,7 @@
 ---
 name: workbuddy-reverse-proxy
 description: "Turn the WorkBuddy AI desktop app's login state into a local OpenAI-compatible endpoint (127.0.0.1:8788) and wire it into Hermes as a custom provider. Use when you want Hermes (or any OpenAI client) to run on WorkBuddy AI subscription models without an API key."
-version: 1.4.1
+version: 1.5.0
 author: Hermes Agent
 license: MIT
 platforms: [windows]
@@ -394,7 +394,8 @@ $h = @{ Authorization = "Bearer " + $j.bearerToken }
 | `401 workbuddy_session_dead` | 去 WorkBuddy 桌面 App 重新登录 |
 | `402 workbuddy_credit_exhausted` | 额度耗尽，改配置无用 |
 | `429` | 退避重试 / 降并发 / 换模型（反代已自动退避，见「别把订阅账号当 API 刷」） |
-| **`403 workbuddy_account_banned`** | **账号被上游风控/封禁，别再重试**——重试只会加重；去 App 确认账号状态 |
+| **`400 workbuddy_channel_blocked`** | **上游网关拦了请求形状**，不是封号：国际区要求首条消息是 `system`（否则 400/code 11128），国区不接受 `developer` 角色。反代已自动补 system，仍报错就是调用方漏了别的形状要求 |
+| **`403 workbuddy_account_banned`** | **账号被上游封禁（code 11140）**，别再重试；去 App 确认账号状态 |
 | `502 workbuddy_upstream` | 看反代日志分清是「目录不可用」还是单次生成失败 |
 | **`502` 且响应体为空** | **系统代理回环**，见下方「系统代理」；`curl`/`Invoke-WebRequest` 正常而 Python/Node 客户端 502 就是它 |
 | **回复 `content` 为空、tokens 却吃满** | `max_tokens` 太小被思考过程吃光，见「max_tokens 预算」 |
@@ -421,13 +422,27 @@ WorkBuddy 的额度是**订阅账号**的，不是按量计费的 API。同一�
 1. **日志带 `upstream_code` 与 `kind`**。旧版只记 HTTP 状态码，403 与「请求写错了」
    长得一模一样，封号后无法复盘。现在每条错误行都有 `upstream_code`（上游业务码）
    与 `kind`（`account_banned` / `hard_credit` / `session_dead` / …）。
-2. **封禁码单独分类**。`11140`（account banned）与 `11128`（channel blocked）直接
-   映射成 `403 workbuddy_account_banned`，客户端一眼看出「别再重试」。
+2. **业务码单独分类**。`11140`（account banned）→ `403 workbuddy_account_banned`；
+   `11128` → `400 workbuddy_channel_blocked`。两者**不能混为一谈**：11128 是网关对
+   **请求形状**的拒绝（见下方「11128 不是封号」），归成封号会把一个能修好的请求
+   伪装成不可恢复的终态。
 3. **指纹统一**。三条上游端点的 `Origin`/`Referer` 统一指向
    `https://www.workbuddy.ai`（旧版错用 API base），对话 UA 与官方
-   `WorkBuddy/<ver> WorkBuddy AI/<ver>` 同形；并且**不再凭空插一条
-   `You are a helpful assistant.` 的 system**——官方客户端不这么发，这句固定前缀
-   是全网唯一的指纹。
+   `WorkBuddy/<ver> WorkBuddy AI/<ver>` 同形。
+
+> **11128 不是封号（2026-10-31 实测踩过的误判）**
+>
+> 官方客户端 `dsh-workbuddy-connect` 的注释写得很明确：国际区 `www.workbuddy.ai`
+> 对**首条消息不是 `system`** 的请求一律回 `400 / code 11128 / "first message is
+> not system prompt"`，`displayMsg.zh` 是「请求被拦截，请重新发送」；国区同一个码
+> 表示「用了 `developer` 角色」。两种都是请求形状问题，与账号状态无关。
+>
+> 官方客户端因此在国际区**主动补一条** `system`（`prepareInternationalChatBody` +
+> `INTERNATIONAL_SYSTEM_PROMPT = "You are a helpful assistant."`）。反代必须照做——
+> 这不是指纹，而是国际网关的前置条件，漏了它每个请求都会被拒。
+>
+> 判据：同一条消息分别带 / 不带 system 各打一次，只有带 system 的那次 200，
+> 就说明是请求形状问题，账号没封。
 
 用法上的三条硬建议：
 

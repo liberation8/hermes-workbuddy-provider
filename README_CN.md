@@ -11,7 +11,7 @@
 [![Platform](https://img.shields.io/badge/platform-Windows-0078D4?logo=windows&logoColor=white)](#-平台支持)
 [![Hermes Skill](https://img.shields.io/badge/Hermes-skill-8A2BE2)](SKILL.md)
 [![English](https://img.shields.io/badge/README-English-blue)](README.md)
-[![Tests](https://img.shields.io/badge/tests-23%2F23%20passed-success)](server/verify-proxy.mjs)
+[![Tests](https://img.shields.io/badge/tests-25%2F25%20passed-success)](server/verify-proxy.mjs)
 
 </div>
 
@@ -50,7 +50,7 @@ WorkBuddy 桌面端把登录态加密存在本地。这个项目把它解出来�
 | **错误分类** | 402 额度 / 401 掉登录 / 429 限流 / 403 封禁，各自映射成清晰的错误码；每条错误日志都带 `upstream_code` + `kind` |
 | **限流与退避** | 最小间隔 800ms、每秒 2 次上限、403/429 指数退避——订阅账号不是 API |
 | **可诊断** | 一个命令告诉你「为什么读不到登录态」 |
-| **23 项回归测试** | 自带 mock 上游，不需要真账号也能验证 |
+| **25 项回归测试** | 自带 mock 上游，不需要真账号也能验证 |
 | **状态栏开关** | Hermes 插件把启停做成状态栏按钮，见下文「🔘 Hermes 插件：反代开关」 |
 
 ---
@@ -185,7 +185,8 @@ model:
 | 401 | `workbuddy_session_dead` | WorkBuddy 登录态失效 | 去 App 重新登录 |
 | 402 | `workbuddy_credit_exhausted` | 额度/积分耗尽 | 去 App 查看套餐 |
 | 429 | `workbuddy_rate_limited` | 上游限流 | 退避重试（反代已自动做） |
-| 403 | `workbuddy_account_banned` | 账号被上游风控/封禁（`11140` / `11128`） | **别再重试**，去 App 确认账号；`error.upstream_code` 带原始码 |
+| 400 | `workbuddy_channel_blocked` | 上游网关拦了请求**形状**（`11128`）——国际区要求首条消息是 `system`，国区不接受 `developer` 角色 | 改请求，**不是封号**；国际区反代已自动补 system |
+| 403 | `workbuddy_account_banned` | 账号被上游封禁（`11140`） | **别再重试**，去 App 确认账号；`error.upstream_code` 带原始码 |
 | 400 | `workbuddy_client_error` | 上游 4xx（含「该模型不支持」） | 换模型 |
 
 ---
@@ -313,7 +314,7 @@ node verify-proxy.mjs
 ```
 
 ```
-PASS 23/23  FAIL 0       退出码 0
+PASS 25/25  FAIL 0       退出码 0
 ```
 
 覆盖了：流式 chunk 拼接、tool_calls 分段、请求体改写（`developer`→`system`）、
@@ -348,7 +349,7 @@ hermes-workbuddy-provider/
 ├── server/
 │   ├── workbuddy-proxy.mjs         # 主体：1464 行，零依赖
 │   ├── inspect-vault.mjs           # 凭证库诊断工具
-│   ├── verify-proxy.mjs            # 23 项回归测试
+│   ├── verify-proxy.mjs            # 25 项回归测试
 │   ├── verify-catalog.mjs          # 模型目录校验
 │   ├── mock-upstream.mjs           # 测试用假上游
 │   ├── config.example.json         # 配置样例
