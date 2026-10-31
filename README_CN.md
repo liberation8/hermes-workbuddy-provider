@@ -11,7 +11,7 @@
 [![Platform](https://img.shields.io/badge/platform-Windows-0078D4?logo=windows&logoColor=white)](#-平台支持)
 [![Hermes Skill](https://img.shields.io/badge/Hermes-skill-8A2BE2)](SKILL.md)
 [![English](https://img.shields.io/badge/README-English-blue)](README.md)
-[![Tests](https://img.shields.io/badge/tests-17%2F17%20passed-success)](server/verify-proxy.mjs)
+[![Tests](https://img.shields.io/badge/tests-23%2F23%20passed-success)](server/verify-proxy.mjs)
 
 </div>
 
@@ -50,7 +50,7 @@ WorkBuddy 桌面端把登录态加密存在本地。这个项目把它解出来�
 | **错误分类** | 402 额度 / 401 掉登录 / 429 限流 / 403 封禁，各自映射成清晰的错误码；每条错误日志都带 `upstream_code` + `kind` |
 | **限流与退避** | 最小间隔 800ms、每秒 2 次上限、403/429 指数退避——订阅账号不是 API |
 | **可诊断** | 一个命令告诉你「为什么读不到登录态」 |
-| **22 项回归测试** | 自带 mock 上游，不需要真账号也能验证 |
+| **23 项回归测试** | 自带 mock 上游，不需要真账号也能验证 |
 | **状态栏开关** | Hermes 插件把启停做成状态栏按钮，见下文「🔘 Hermes 插件：反代开关」 |
 
 ---
@@ -313,7 +313,7 @@ node verify-proxy.mjs
 ```
 
 ```
-PASS 18/18  FAIL 0       退出码 0
+PASS 23/23  FAIL 0       退出码 0
 ```
 
 覆盖了：流式 chunk 拼接、tool_calls 分段、请求体改写（`developer`→`system`）、
@@ -348,7 +348,7 @@ hermes-workbuddy-provider/
 ├── server/
 │   ├── workbuddy-proxy.mjs         # 主体：1464 行，零依赖
 │   ├── inspect-vault.mjs           # 凭证库诊断工具
-│   ├── verify-proxy.mjs            # 22 项回归测试
+│   ├── verify-proxy.mjs            # 23 项回归测试
 │   ├── verify-catalog.mjs          # 模型目录校验
 │   ├── mock-upstream.mjs           # 测试用假上游
 │   ├── config.example.json         # 配置样例

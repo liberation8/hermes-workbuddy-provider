@@ -9,7 +9,7 @@
 [![Zero dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)](package.json)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows-0078D4?logo=windows&logoColor=white)](#-platform-support)
-[![Tests](https://img.shields.io/badge/tests-17%2F17%20passed-success)](server/verify-proxy.mjs)
+[![Tests](https://img.shields.io/badge/tests-23%2F23%20passed-success)](server/verify-proxy.mjs)
 [![Chinese](https://img.shields.io/badge/README-%E4%B8%AD%E6%96%87-red)](README_CN.md)
 
 </div>
@@ -47,7 +47,7 @@ The WorkBuddy desktop app keeps your login encrypted on disk. This project decry
 | **Error classification** | 402 quota / 401 dead session / 429 rate limit / 403 ban, each mapped to a clear error type; every error log line carries `upstream_code` + `kind`. |
 | **Rate limiting & backoff** | Min interval 800 ms, 2 req/s ceiling, exponential backoff on 403/429 — the subscription account is not an API. |
 | **Diagnosable** | One command tells you why your login state cannot be read. |
-| **17 regression tests** | Ships a mock upstream — verifiable without a real account. |
+| **23 regression tests** | Ships a mock upstream — verifiable without a real account. |
 | **Status-bar switch** | Hermes plugin puts an on/off button in the status bar — see [below](#-hermes-plugin-onoff-switch). |
 
 ---
@@ -312,7 +312,7 @@ node verify-proxy.mjs
 ```
 
 ```
-PASS 18/18  FAIL 0       exit code 0
+PASS 23/23  FAIL 0       exit code 0
 ```
 
 Covered: streaming chunk assembly, segmented `tool_calls`, request-body rewriting (`developer`→`system`), four upstream error mappings, Bearer validation, model-catalog caching, single-flight refresh on expiry, **byte-level AAD comparison + AES-256-GCM round-trip + three tampering cases that must fail authentication**, and a **cold-start guard** that fails if any `execFileSync` loses `windowsHide` or the per-key `reg query` loop comes back.

@@ -78,6 +78,22 @@ function resolveHomeDir() {
   return path.join(os.homedir(), '.dsh');
 }
 
+// DSH_HOME 未设时这里落到 ~/.dsh，而 Hermes 读的是 $DSH_HOME 下那份 —— 两份
+// bearer 不同就是一次 401 invalid_bearer，且日志里看不出是「读错了文件」。
+// 启动时把实际用的目录写进日志，并在两份并存且 bearer 不同时告警。
+function warnHomeMismatch(home, bearer) {
+  const alt = process.env.DSH_HOME
+    ? path.join(os.homedir(), '.dsh')
+    : null;
+  if (!alt || path.resolve(alt) === path.resolve(home)) return;
+  const other = readStateFile(path.join(alt, '.workbuddy-proxy.json'));
+  if (other?.bearerToken && bearer && other.bearerToken !== bearer) {
+    process.stderr.write(
+      `${JSON.stringify({ ts: new Date().toISOString(), event: 'home-mismatch', using: home, other: alt })}\n`,
+    );
+  }
+}
+
 // 读写 $DSH_HOME/.workbuddy-proxy.json（bearer / 实际端口）
 function readStateFile(file) {
   try {
@@ -1623,6 +1639,7 @@ function main() {
     generated = true;
   }
   state.bearer = bearer;
+  warnHomeMismatch(home, bearer);
 
   const server = http.createServer((req, res) => {
     route(req, res).catch(() => {
@@ -1683,7 +1700,7 @@ function main() {
       process.stderr.write(`${JSON.stringify({ ts: new Date().toISOString(), event: 'bearer-generated', bearer })}\n`);
     }
     process.stdout.write(
-      `${JSON.stringify({ ts: new Date().toISOString(), event: 'listening', host: cfg.host, port, source: cred.source })}\n`,
+      `${JSON.stringify({ ts: new Date().toISOString(), event: 'listening', host: cfg.host, port, home, source: cred.source })}\n`,
     );
   });
 

@@ -198,6 +198,13 @@ providers:
 即默认落在用户目录下的 `.dsh` 文件夹里，**不是** `D:\Hermes`，也不是 `server\`。
 文件里存明文 `bearer`、实际 `port`、`host`（mode 600）。
 
+> **两份状态文件并存 = 每次请求 401。** 这台机器上曾经 `D:\dsh\.workbuddy-proxy.json`
+> 与 `%USERPROFILE%\.dsh\.workbuddy-proxy.json` 同时存在、bearer 还不一样：
+> Hermes 读前者（`%DSH_HOME%`），而没带 `DSH_HOME` 起的反代写后者。
+> 现在 `listening` 日志带 `home` 字段直接告诉你读了哪份，两份冲突还会打
+> `{"event":"home-mismatch"}`；插件启动反代时也会把子进程的 `DSH_HOME` 钉成
+> `PROXY_STATE_FILE` 的父目录。手工起反代务必自己带上 `DSH_HOME`。
+
 **端口被占用**：进程会直接退出，`EADDRINUSE` → **退出码 `2`**。换 `config.json` 的
 `port`，或按 6.2.1 找出占用者。
 

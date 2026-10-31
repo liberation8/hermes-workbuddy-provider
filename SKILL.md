@@ -1,7 +1,7 @@
 ---
 name: workbuddy-reverse-proxy
 description: "Turn the WorkBuddy AI desktop app's login state into a local OpenAI-compatible endpoint (127.0.0.1:8788) and wire it into Hermes as a custom provider. Use when you want Hermes (or any OpenAI client) to run on WorkBuddy AI subscription models without an API key."
-version: 1.4.0
+version: 1.4.1
 author: Hermes Agent
 license: MIT
 platforms: [windows]
@@ -363,6 +363,27 @@ $h = @{ Authorization = "Bearer " + $j.bearerToken }
 
 另注：这台机器上 `pwsh` 在受限沙箱里连 `'hello'` 都起不来（exit code `3221225794`），
 所有 shell 探测都要先提权，否则会被误判成「命令失败」。
+
+### 401 但 bearer 明明是对的：先看反代读了哪个状态文件
+
+反代按 `$DSH_HOME` 决定状态文件位置，**没设就落到 `%USERPROFILE%\.dsh`**。这台机器上
+两份曾经同时存在、bearer 还不一样：
+
+| 文件 | 谁在读 |
+|---|---|
+| `D:\dsh\.workbuddy-proxy.json` | Hermes（`%DSH_HOME%` 指向这里） |
+| `%USERPROFILE%\.dsh\.workbuddy-proxy.json` | 未设 `DSH_HOME` 时启动的反代 |
+
+于是反代自己写一份、Hermes 读另一份，每个请求都是 `401 invalid_bearer`，而日志里
+看不出是「读错文件」。现在有两道防线：
+
+1. `workbuddy-proxy.mjs` 的 `listening` 日志带 `home` 字段——`{"event":"listening",…,"home":"D:\\dsh"}`，
+   一眼看到实际落点；两份并存且 bearer 不同时还会打 `{"event":"home-mismatch"}`。
+2. 插件 `plugin_api.py` 的 `_child_env()` 强制把子进程的 `DSH_HOME` 设成
+   `PROXY_STATE_FILE` 的父目录，**不再继承宿主的 env**。
+
+手工起反代时请自己带上：`$env:DSH_HOME='D:\dsh'`（或先 `set DSH_HOME=D:\dsh`）。
+
 ## 故障处置
 
 逐条动作见 `references/hermes-wiring.md` §11，速查：

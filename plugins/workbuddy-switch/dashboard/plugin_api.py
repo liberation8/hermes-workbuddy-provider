@@ -334,6 +334,23 @@ def _status_payload(error: Optional[str] = None) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+def _child_env() -> Dict[str, str]:
+    """Env for the proxy child.
+
+    The proxy picks its state file from $DSH_HOME (falling back to ~/.dsh), and
+    Hermes reads the bearer from the same file. Inheriting whatever the Hermes
+    host happened to have leaves the two free to disagree: a host started
+    before DSH_HOME was set writes ~/.dsh/.workbuddy-proxy.json while Hermes
+    reads D:\dsh one, and every call then fails with 401 invalid_bearer.
+    Pin it to the directory of PROXY_STATE_FILE so both sides always agree.
+    """
+    env = dict(os.environ)
+    home = str(PROXY_STATE_FILE.parent)
+    if home and home not in (".", ""):
+        env["DSH_HOME"] = home
+    return env
+
+
 def do_status() -> Dict[str, Any]:
     return _status_payload()
 
@@ -355,6 +372,7 @@ def do_start() -> Dict[str, Any]:
         "cwd": str(Path(PROXY_SCRIPT).parent),
         "close_fds": True,
         "stdin": subprocess.DEVNULL,
+        "env": _child_env(),
     }
     if os.name == "nt":
         popen_kwargs["creationflags"] = _CREATE_FLAGS

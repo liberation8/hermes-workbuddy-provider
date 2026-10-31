@@ -115,6 +115,16 @@ def phase_a():
     print("  logPath:", api._err_log_path())
     check("phase A endpoint is the isolated one", port == PHASE_A_PORT, "port={}".format(port))
 
+    # The proxy resolves its state file from $DSH_HOME; if the child inherits a
+    # different one than PROXY_STATE_FILE points at, the bearer it writes and the
+    # bearer Hermes reads diverge and every call is a 401 invalid_bearer.
+    child_env = api._child_env()
+    check(
+        "A0 child env pins DSH_HOME to the state file directory",
+        child_env.get("DSH_HOME") == str(api.PROXY_STATE_FILE.parent),
+        "DSH_HOME={!r} state={}".format(child_env.get("DSH_HOME"), api.PROXY_STATE_FILE),
+    )
+
     # Make sure nothing is left over from an earlier run.
     if api._health(host, port) is not None:
         print("  pre-cleaning a leftover listener on {}".format(port))

@@ -541,7 +541,22 @@ async function main() {
     record('节流检查', false, err?.message || String(err));
   }
 
-  // 14) inspect-vault：明文来源分类且不泄露 token
+  // 14) 状态文件落点：listening 日志必须写明实际 home，否则「读错了 state 文件」
+  // 在日志里看起来和「bearer 配错」一模一样（2026-10-31 实测踩过：401 invalid_bearer）。
+  try {
+    const logText = fs.readFileSync(proxy.__logPath, 'utf8');
+    const line = logText.split('\n').find((l) => l.includes('"event":"listening"')) || '';
+    let parsed = {};
+    try {
+      parsed = JSON.parse(line);
+    } catch {}
+    const homeOk = typeof parsed.home === 'string' && path.resolve(parsed.home) === path.resolve(STATE_HOME);
+    record('listening 日志写明实际 DSH_HOME（state 文件落点可诊断）', homeOk, `home=${parsed.home} expect=${STATE_HOME}`);
+  } catch (err) {
+    record('state 文件落点检查', false, err?.message || String(err));
+  }
+
+  // 15) inspect-vault：明文来源分类且不泄露 token
   const insp = await runInspect(['--json'], {
     ...env,
     WORKBUDDY_PROXY_TOKEN: 'inspect-token-abcdef',
