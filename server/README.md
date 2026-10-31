@@ -65,6 +65,9 @@ node verify-proxy.mjs
 
 ## 鉴权与错误码
 
+`GET /healthz` 免鉴权，返回 `{ok,status,uptime_s,throttle:{minIntervalMs,maxPerSec,backoffMs,backoffRemainingMs}}`
+——`throttle` 直接告诉你「现在是不是在退避、还剩多久」。
+
 除 `/healthz` 外全部要求 `Authorization: Bearer <config 里的 bearer>`，严格相等（`timingSafeEqual`），
 不匹配回 `401 {"error":{"type":"invalid_bearer"}}`。方法不对回 `405 invalid_request_error`。
 

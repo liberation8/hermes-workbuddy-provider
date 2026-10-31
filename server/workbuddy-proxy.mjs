@@ -1520,7 +1520,8 @@ async function route(req, res) {
   const routePath = normalizeRoute(req.url || '/');
 
   if (routePath === '/healthz') {
-    sendJson(res, 200, { ok: true, status: 'ok', uptime_s: Math.round(process.uptime()) });
+    // throttle 暴露在健康检查里：被封/被限流时能一眼看出「现在是不是在退避」。
+    sendJson(res, 200, { ok: true, status: 'ok', uptime_s: Math.round(process.uptime()), throttle: throttleState() });
     return;
   }
 

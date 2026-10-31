@@ -321,7 +321,13 @@ async function main() {
       await sleep(100);
     }
   }
-  record('/healthz 可用', healthy, 'healthz 未在 5s 内就绪');
+  let healthBody = {};
+  try {
+    healthBody = (await json(proxyPort, 'GET', '/healthz')).json || {};
+  } catch {}
+  const throttleVisible =
+    healthBody?.throttle?.minIntervalMs === 800 && healthBody?.throttle?.maxPerSec === 2 && typeof healthBody?.throttle?.backoffRemainingMs === 'number';
+  record('/healthz 可用且暴露节流状态', healthy && throttleVisible, `throttle=${JSON.stringify(healthBody?.throttle)}`);
 
   const H = { Authorization: `Bearer ${BEARER}`, 'Content-Type': 'application/json' };
 
