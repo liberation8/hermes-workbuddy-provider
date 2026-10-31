@@ -47,9 +47,10 @@ WorkBuddy 桌面端把登录态加密存在本地。这个项目把它解出来�
 | **自动刷新** | 过期前单飞刷新，多个并发请求只触发一次 |
 | **OpenAI 兼容** | `/v1/chat/completions`（流式 + 非流式）、`/v1/models` |
 | **27 个模型** | 含 `glm-5.3`、`deepseek-v4.1-flash`、`kimi-k3`、`gpt-6-astra` 等 |
-| **错误分类** | 402 额度 / 401 掉登录 / 429 限流，各自映射成清晰的错误码 |
+| **错误分类** | 402 额度 / 401 掉登录 / 429 限流 / 403 封禁，各自映射成清晰的错误码；每条错误日志都带 `upstream_code` + `kind` |
+| **限流与退避** | 最小间隔 800ms、每秒 2 次上限、403/429 指数退避——订阅账号不是 API |
 | **可诊断** | 一个命令告诉你「为什么读不到登录态」 |
-| **18 项回归测试** | 自带 mock 上游，不需要真账号也能验证 |
+| **22 项回归测试** | 自带 mock 上游，不需要真账号也能验证 |
 | **状态栏开关** | Hermes 插件把启停做成状态栏按钮，见下文「🔘 Hermes 插件：反代开关」 |
 
 ---
@@ -183,7 +184,8 @@ model:
 | 401 | `invalid_bearer` | 本地 Bearer 不对 | 从 `.workbuddy-proxy.json` 重新取 |
 | 401 | `workbuddy_session_dead` | WorkBuddy 登录态失效 | 去 App 重新登录 |
 | 402 | `workbuddy_credit_exhausted` | 额度/积分耗尽 | 去 App 查看套餐 |
-| 429 | `workbuddy_rate_limited` | 上游限流 | 退避重试 |
+| 429 | `workbuddy_rate_limited` | 上游限流 | 退避重试（反代已自动做） |
+| 403 | `workbuddy_account_banned` | 账号被上游风控/封禁（`11140` / `11128`） | **别再重试**，去 App 确认账号；`error.upstream_code` 带原始码 |
 | 400 | `workbuddy_client_error` | 上游 4xx（含「该模型不支持」） | 换模型 |
 
 ---
@@ -346,7 +348,7 @@ hermes-workbuddy-provider/
 ├── server/
 │   ├── workbuddy-proxy.mjs         # 主体：1464 行，零依赖
 │   ├── inspect-vault.mjs           # 凭证库诊断工具
-│   ├── verify-proxy.mjs            # 18 项回归测试
+│   ├── verify-proxy.mjs            # 22 项回归测试
 │   ├── verify-catalog.mjs          # 模型目录校验
 │   ├── mock-upstream.mjs           # 测试用假上游
 │   ├── config.example.json         # 配置样例

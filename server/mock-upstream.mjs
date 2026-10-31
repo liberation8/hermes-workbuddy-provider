@@ -31,7 +31,15 @@ const state = {
   lastAuth: null,
   refreshCalls: 0,
   tokenAfterRefresh: null,
+  lastHeaders: null,
+  lastMessages: null,
+  // 到达时间戳，供 verify 断言节流（最小间隔 / 每秒窗口）真的生效。
+  requestTimes: [],
 };
+
+// 与 workbuddy-proxy.mjs 的 GLOBAL_ORIGIN 对齐：Origin/Referer 必须指向产品站点，
+// 不能是 API base（mock 的 base 是 127.0.0.1，用错了这里立刻炸）。
+const EXPECTED_ORIGIN = 'https://www.workbuddy.ai';
 
 function assertUpstreamHeaders(headers, required) {
   const h = { ...headers };
@@ -61,6 +69,8 @@ function assertUpstreamHeaders(headers, required) {
     if (h['x-ide-type'] !== 'WorkBuddy') missing.push('x-ide-type');
   }
   if (h['x-product'] !== 'SaaS' && !required.refresh) missing.push('x-product');
+  if (!required.refresh && String(h.origin || '') !== EXPECTED_ORIGIN) missing.push(`origin=${h.origin}`);
+  if (!required.refresh && String(h.referer || '') !== `${EXPECTED_ORIGIN}/`) missing.push(`referer=${h.referer}`);
   if (required.behavior && !/^WorkBuddy\/[\d.]+\s+WorkBuddy AI\/[\d.]+$/.test(String(h['user-agent'] || ''))) {
     missing.push('user-agent');
   }
@@ -78,6 +88,10 @@ function assertUpstreamBody(body) {
   if (msgs.some((m) => m && m.role === 'developer')) return 'developer-role';
   if (body.reasoning_effort === 'off') return 'reasoning-effort-off';
   if (body.__expectNoTools && (body.tools || body.functions)) return 'tools-not-stripped';
+  // 反代不许凭空补一条 system：那句固定的 'You are a helpful assistant.' 是全网唯一指纹。
+  if (msgs.some((m) => m && typeof m.content === 'string' && m.content.includes('You are a helpful assistant.'))) {
+    return 'default-system-prompt';
+  }
   return null;
 }
 
@@ -93,7 +107,16 @@ const server = http.createServer(async (req, res) => {
   // mock 自省：供 verify 脚本查询是否发生过刷新
   if (url === '/__state') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ refreshCalls: state.refreshCalls, lastAuth: state.lastAuth, chatCalls: state.chatCalls.length }));
+    res.end(
+      JSON.stringify({
+        refreshCalls: state.refreshCalls,
+        lastAuth: state.lastAuth,
+        chatCalls: state.chatCalls.length,
+        requestTimes: state.requestTimes,
+        lastHeaders: state.lastHeaders,
+        lastMessages: state.lastMessages,
+      }),
+    );
     return;
   }
 
@@ -150,6 +173,9 @@ const server = http.createServer(async (req, res) => {
       body = JSON.parse(raw);
     } catch {}
     state.lastAuth = String(req.headers.authorization || '');
+    state.lastHeaders = { origin: req.headers.origin, referer: req.headers.referer, userAgent: req.headers['user-agent'] };
+    state.lastMessages = (body.messages || []).map((m) => ({ role: m && m.role, content: typeof m?.content === 'string' ? m.content.slice(0, 120) : '' }));
+    state.requestTimes.push(Date.now());
     state.chatCalls.push({ model: body.model, auth: state.lastAuth });
 
     const bodyErr = assertUpstreamBody(body);
@@ -169,6 +195,12 @@ const server = http.createServer(async (req, res) => {
     if (userText.includes('[ERR]')) {
       const b = JSON.stringify({ code: 401, msg: 'Offline user session not found' });
       res.writeHead(401, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(b) });
+      res.end(b);
+      return;
+    }
+    if (userText.includes('[BAN]')) {
+      const b = JSON.stringify({ code: 11140, msg: 'account banned', displayMsg: { zh: '账号已被封禁' } });
+      res.writeHead(403, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(b) });
       res.end(b);
       return;
     }

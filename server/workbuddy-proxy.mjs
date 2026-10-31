@@ -18,11 +18,23 @@ const REFRESH_MARGIN_MS = 120_000;
 const CATALOG_TTL_MS = 6 * 60 * 60 * 1000;
 const OWN_COPY_PATH = 'D:\\dsh\\.workbuddy-auth.json';
 const DEFAULT_CATALOG_PATH = 'D:\\dsh\\.workbuddy-ai-catalog.json';
-const DEFAULT_SYSTEM_PROMPT = 'You are a helpful assistant.';
 const CLIENT_UA = 'CLI/2.63.2 CodeBuddy/2.63.2';
 const ENC_MARKER = '$wbEncrypted';
 
+// 官方客户端（dsh-workbuddy-connect host-heartbeat :928-930 originReferer）把 Origin/Referer
+// 指向「计费站点」而不是 API base：国际区 www.workbuddy.ai，国区 www.codebuddy.cn。
+// 早先版本用 upstreamBase 充当 Origin，等于把一个 127.0.0.1 / 反代地址写进跨域头，是明显的机器指纹。
+const GLOBAL_ORIGIN = 'https://www.workbuddy.ai';
+const CN_ORIGIN = 'https://www.codebuddy.cn';
+
+// 节流默认值：上游是「订阅账号」，短时高频是封号的头号诱因（实测曾被 25 次/分打到 403）。
+const DEFAULT_MIN_INTERVAL_MS = 800;
+const DEFAULT_MAX_PER_SEC = 2;
+const DEFAULT_BACKOFF_BASE_MS = 2000;
+const DEFAULT_BACKOFF_MAX_MS = 60_000;
+
 const nowMs = () => Date.now();
+const numOr = (v, d) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : d);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ---------- 配置 ----------
@@ -52,6 +64,11 @@ function loadConfig() {
     productName: typeof cfg.productName === 'string' && cfg.productName ? cfg.productName : 'WorkBuddy AI',
     catalogPath: typeof cfg.catalogPath === 'string' && cfg.catalogPath ? cfg.catalogPath : DEFAULT_CATALOG_PATH,
     credential: cfg.credential && typeof cfg.credential === 'object' ? cfg.credential : null,
+    // 节流：三条都是「越小越激进」，用 numOr 兜住 null/负数/字符串，避免配错把限流关掉。
+    minIntervalMs: numOr(cfg.minIntervalMs, DEFAULT_MIN_INTERVAL_MS),
+    maxPerSec: numOr(cfg.maxPerSec, DEFAULT_MAX_PER_SEC),
+    backoffBaseMs: numOr(cfg.backoffBaseMs, DEFAULT_BACKOFF_BASE_MS),
+    backoffMaxMs: numOr(cfg.backoffMaxMs, DEFAULT_BACKOFF_MAX_MS),
   };
 }
 
@@ -497,20 +514,34 @@ function persistOwnCopy(cred) {
 }
 
 // ---------- 上游请求 ----------
-function commonHeaders(ua) {
+// Origin/Referer 只取决于凭证归属区，与 API base 无关（官方 originReferer 同逻辑）。
+function originOf(cred, cfg) {
+  const d = String(cred?.domain || '').toLowerCase();
+  const base = String(cfg?.upstreamBase || '').toLowerCase();
+  if (d.includes('codebuddy.cn') || base.includes('codebuddy.cn') || base.includes('tencent.com')) return CN_ORIGIN;
+  return GLOBAL_ORIGIN;
+}
+
+function commonHeaders(ua, origin) {
   return {
     Accept: 'application/json, text/plain, */*',
     'Accept-Language': 'zh-CN,zh;q=0.9',
     'X-Requested-With': 'XMLHttpRequest',
-    Origin: state.cfg.upstreamBase,
-    Referer: `${state.cfg.upstreamBase}/`,
+    Origin: origin,
+    Referer: `${origin}/`,
     'User-Agent': ua,
   };
 }
 
+// 对话 UA 与官方 chatUserAgent 同形：WorkBuddy/<ver> <product>/<ver>（国际区 product = WorkBuddy AI）。
+function chatUserAgent(cfg) {
+  const product = originOf(null, cfg) === CN_ORIGIN ? 'WorkBuddy' : 'WorkBuddy AI';
+  return `WorkBuddy/${cfg.appVersion} ${product}/${cfg.appVersion}`;
+}
+
 function chatHeaders(cred, cfg) {
   const h = {
-    ...commonHeaders(`${cfg.productName === 'WorkBuddy AI' ? 'WorkBuddy' : 'WorkBuddy'}/${cfg.appVersion} ${cfg.productName}/${cfg.appVersion}`),
+    ...commonHeaders(chatUserAgent(cfg), originOf(cred, cfg)),
     Authorization: `Bearer ${cred.accessToken}`,
     'Content-Type': 'application/json',
     'X-IDE-Type': 'WorkBuddy',
@@ -531,11 +562,12 @@ function chatHeaders(cred, cfg) {
 }
 
 function catalogHeaders(cred, cfg) {
+  const origin = originOf(cred, cfg);
   return {
     Accept: 'application/json',
     Authorization: `Bearer ${cred.accessToken}`,
-    Origin: cfg.upstreamBase,
-    Referer: `${cfg.upstreamBase}/`,
+    Origin: origin,
+    Referer: `${origin}/`,
     'X-Requested-With': 'XMLHttpRequest',
     'X-Product': 'SaaS',
     'User-Agent': `WorkBuddyAI/${cfg.appVersion}`,
@@ -545,7 +577,7 @@ function catalogHeaders(cred, cfg) {
 
 function refreshHeaders(cred) {
   return {
-    ...commonHeaders(CLIENT_UA),
+    ...commonHeaders(CLIENT_UA, originOf(cred, state.cfg)),
     'Content-Type': 'application/json',
     'X-Refresh-Token': cred.refreshToken || '',
     'X-Auth-Refresh-Source': 'workbuddy',
@@ -616,9 +648,8 @@ function transformMessages(messages) {
     if (copy.role === 'developer') copy.role = 'system';
     out.push(copy);
   }
-  if (out.length === 0 || out[0].role !== 'system') {
-    out.unshift({ role: 'system', content: DEFAULT_SYSTEM_PROMPT });
-  }
+  // 不再补 'You are a helpful assistant.'：官方客户端不会凭空插一条 system，
+  // 这条固定前缀是全网唯一的指纹（同一句话从同一出口发给上游）。客户端没给就不发。
   return out;
 }
 
@@ -678,8 +709,17 @@ function errText(payload) {
   return parts.filter((x) => typeof x === 'string' && x).join(' | ').toLowerCase();
 }
 
+// 封禁/风控类错误码。11128（channel blocked）与 11140（account banned）来自上游网关的
+// 业务码而非 HTTP 语义，403 本身在 classify 里原本只会落到 'client'，等于把「号被封了」
+// 当成「请求写错了」，日志里也看不出区别。
+const BAN_CODES = [11140, 11128];
+const BAN_PATTERNS = ['account banned', 'account is banned', 'account suspended', 'account disabled', 'channel blocked', '访问受限', '账号被封', '账户被封', '账号异常'];
+
 function classify(status, payload) {
   const text = errText(payload);
+  const code = payload && typeof payload === 'object' ? Number(payload.code) : NaN;
+  if (BAN_CODES.includes(code)) return 'account_banned';
+  if (BAN_PATTERNS.some((p) => text.includes(p))) return 'account_banned';
   if (status === 402) return 'hard_credit';
   if (status === 401 || text.includes('offline user session not found') || text.includes('12153')) return 'session_dead';
   if (CREDIT_PATTERNS.some((p) => text.includes(p))) return 'hard_credit';
@@ -1056,6 +1096,78 @@ async function getModels() {
   throw lastErr;
 }
 
+// ---------- 节流与退避 ----------
+// 上游是「订阅账号」而不是按量 API，短时高频是封号的头号诱因（实测日志里出现过 25 次/分）。
+// 三道闸：最小间隔把突发打平、每秒窗口挡住并发子代理同时起跑、403/429 指数退避。
+// 三者都串行化在 throttle.chain 上，保证并发请求按序拿到时间片而不是一起冲。
+const throttle = { lastAt: 0, window: [], backoffMs: 0, backoffUntil: 0, chain: Promise.resolve() };
+
+function throttleState() {
+  return {
+    minIntervalMs: state.cfg.minIntervalMs,
+    maxPerSec: state.cfg.maxPerSec,
+    backoffMs: throttle.backoffMs,
+    backoffRemainingMs: Math.max(0, throttle.backoffUntil - nowMs()),
+  };
+}
+
+async function acquireUpstreamSlot() {
+  const prev = throttle.chain;
+  let release;
+  throttle.chain = new Promise((r) => {
+    release = r;
+  });
+  await prev;
+  try {
+    const cfg = state.cfg;
+    // 有界重试：每轮只处理一个闸门，最多等 8 轮（配置写歪也不会死循环）。
+    for (let round = 0; round < 8; round++) {
+      const now = nowMs();
+      if (throttle.backoffUntil > now) {
+        await sleep(throttle.backoffUntil - now);
+        continue;
+      }
+      throttle.window = throttle.window.filter((t) => now - t < 1000);
+      if (cfg.maxPerSec > 0 && throttle.window.length >= cfg.maxPerSec) {
+        await sleep(1000 - (now - throttle.window[0]) + 1);
+        continue;
+      }
+      const gap = throttle.lastAt ? now - throttle.lastAt : Infinity;
+      if (cfg.minIntervalMs > 0 && gap < cfg.minIntervalMs) {
+        await sleep(cfg.minIntervalMs - gap);
+        continue;
+      }
+      throttle.lastAt = nowMs();
+      throttle.window.push(throttle.lastAt);
+      return;
+    }
+  } finally {
+    release();
+  }
+}
+
+// 每个上游响应回喂一次：连续 403/429 时指数加长安静期，成功一次就清零。
+function noteUpstreamOutcome(status, payload) {
+  const kind = classify(status, payload);
+  if (kind === 'account_banned') {
+    throttle.backoffMs = state.cfg.backoffMaxMs;
+    throttle.backoffUntil = nowMs() + throttle.backoffMs;
+    logLine({ event: 'throttle_backoff', kind, ms: throttle.backoffMs, reason: 'account_banned' });
+    return kind;
+  }
+  if (status === 403 || status === 429) {
+    throttle.backoffMs = throttle.backoffMs ? Math.min(throttle.backoffMs * 2, state.cfg.backoffMaxMs) : state.cfg.backoffBaseMs;
+    throttle.backoffUntil = nowMs() + throttle.backoffMs;
+    logLine({ event: 'throttle_backoff', kind, ms: throttle.backoffMs, reason: `http_${status}` });
+    return kind;
+  }
+  if (status < 400) {
+    throttle.backoffMs = 0;
+    throttle.backoffUntil = 0;
+  }
+  return kind;
+}
+
 // ---------- 对话 ----------
 function upstreamErrorToClient(res, status, payload, extra) {
   const kind = classify(status, payload);
@@ -1070,6 +1182,14 @@ function upstreamErrorToClient(res, status, payload, extra) {
   }
   if (kind === 'soft_rate') {
     sendError(res, 429, 'workbuddy_rate_limited', message, extra);
+    return;
+  }
+  if (kind === 'account_banned') {
+    // 403 保留原状态码：客户端（Hermes）把它当不可重试的终态，不再重试放大风控。
+    sendError(res, 403, 'workbuddy_account_banned', `${message}（账号被上游风控/封禁，别再重试）`, {
+      ...(extra || {}),
+      upstream_code: payload?.code != null ? payload.code : undefined,
+    });
     return;
   }
   if (kind === 'server') {
@@ -1107,6 +1227,9 @@ async function handleChat(req, res, t0) {
     return;
   }
 
+  // 拿到上游时间片再发（最小间隔 + 每秒窗口 + 退避），并发请求在这里排队。
+  await acquireUpstreamSlot();
+
   let acc;
   try {
     acc = await doRequest(`${state.cfg.upstreamBase}/v2/chat/completions`, {
@@ -1129,17 +1252,24 @@ async function handleChat(req, res, t0) {
     } catch {
       payload = { message: rawErr.toString('utf8').slice(0, 500) };
     }
+    const kind = noteUpstreamOutcome(acc.status, payload);
     upstreamErrorToClient(res, acc.status, payload, { refreshed });
+    // upstream_code / kind 必须入库：封号与「请求写错了」原本在日志里长得一模一样。
     logLine({
       method: req.method,
       path: req.url,
       status: res.statusCode,
+      upstream_status: acc.status,
+      upstream_code: payload?.code != null ? payload.code : null,
+      kind,
       ms: nowMs() - t0,
       refreshed,
       source: state.cred.source,
     });
     return;
   }
+
+  noteUpstreamOutcome(acc.status, null);
 
   // 上游可能直接回 JSON（非 SSE）
   if (!ctype.includes('text/event-stream')) {
@@ -1295,11 +1425,16 @@ async function handleChat(req, res, t0) {
 
   if (upstreamEnvelopeError) {
     if (!headersSent) {
+      // 200 里夹着错误信封同样是「账号级」信号（封禁码常这样下发），一样要回喂节流器。
+      const kind = noteUpstreamOutcome(200, upstreamEnvelopeError);
       upstreamErrorToClient(res, 200, upstreamEnvelopeError, { refreshed });
       logLine({
         method: req.method,
         path: req.url,
         status: res.statusCode,
+        upstream_status: 200,
+        upstream_code: upstreamEnvelopeError?.code != null ? upstreamEnvelopeError.code : null,
+        kind,
         ms: nowMs() - t0,
         refreshed,
         source: state.cred.source,

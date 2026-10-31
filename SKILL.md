@@ -1,7 +1,7 @@
 ---
 name: workbuddy-reverse-proxy
 description: "Turn the WorkBuddy AI desktop app's login state into a local OpenAI-compatible endpoint (127.0.0.1:8788) and wire it into Hermes as a custom provider. Use when you want Hermes (or any OpenAI client) to run on WorkBuddy AI subscription models without an API key."
-version: 1.3.0
+version: 1.4.0
 author: Hermes Agent
 license: MIT
 platforms: [windows]
@@ -372,13 +372,48 @@ $h = @{ Authorization = "Bearer " + $j.bearerToken }
 | `401 invalid_bearer` | `.env` 的 `WORKBUDDY_API_KEY` ≠ 状态文件的 `bearer`，改成同一个值 |
 | `401 workbuddy_session_dead` | 去 WorkBuddy 桌面 App 重新登录 |
 | `402 workbuddy_credit_exhausted` | 额度耗尽，改配置无用 |
-| `429` | 退避重试 / 降并发 / 换模型 |
+| `429` | 退避重试 / 降并发 / 换模型（反代已自动退避，见「别把订阅账号当 API 刷」） |
+| **`403 workbuddy_account_banned`** | **账号被上游风控/封禁，别再重试**——重试只会加重；去 App 确认账号状态 |
 | `502 workbuddy_upstream` | 看反代日志分清是「目录不可用」还是单次生成失败 |
 | **`502` 且响应体为空** | **系统代理回环**，见下方「系统代理」；`curl`/`Invoke-WebRequest` 正常而 Python/Node 客户端 502 就是它 |
 | **回复 `content` 为空、tokens 却吃满** | `max_tokens` 太小被思考过程吃光，见「max_tokens 预算」 |
 | 启动即退出、退出码 `2` | 端口被占用（EADDRINUSE），换 `port` |
 | 启动即退出、提示找不到凭证 | 先登录 App，或设 `WORKBUDDY_PROXY_TOKEN` / `WORKBUDDY_AUTH_FILE` |
 | 诊断说找不到可执行文件、但反代实际能跑 | `reg.exe` 被沙箱拒绝导致探测失败，设 `WORKBUDDY_EXE` |
+
+### 别把订阅账号当 API 刷（2026-10-31 加，封号后补的防线）
+
+WorkBuddy 的额度是**订阅账号**的，不是按量计费的 API。同一个号在短时间内高频调用，
+在上游看来和脚本刷量没有区别——2026-10-31 就有一个号因此被封（403，旧版日志里
+只有一条 `"status":403`，连上游 code 都没记，事后无法定性）。
+
+反代现在自带三道闸，默认就开着，**不要为了"快一点"把它们关掉**：
+
+| 配置键 | 默认 | 作用 |
+|---|---|---|
+| `minIntervalMs` | `800` | 两次上游请求最小间隔，把突发打平 |
+| `maxPerSec` | `2` | 每秒上限，挡住并发子代理同时起跑 |
+| `backoffBaseMs` / `backoffMaxMs` | `2000` / `60000` | 被 403/429 打中后指数安静下来；封禁码直接顶到上限 |
+
+配套的三处改动（都在 `server\workbuddy-proxy.mjs`）：
+
+1. **日志带 `upstream_code` 与 `kind`**。旧版只记 HTTP 状态码，403 与「请求写错了」
+   长得一模一样，封号后无法复盘。现在每条错误行都有 `upstream_code`（上游业务码）
+   与 `kind`（`account_banned` / `hard_credit` / `session_dead` / …）。
+2. **封禁码单独分类**。`11140`（account banned）与 `11128`（channel blocked）直接
+   映射成 `403 workbuddy_account_banned`，客户端一眼看出「别再重试」。
+3. **指纹统一**。三条上游端点的 `Origin`/`Referer` 统一指向
+   `https://www.workbuddy.ai`（旧版错用 API base），对话 UA 与官方
+   `WorkBuddy/<ver> WorkBuddy AI/<ver>` 同形；并且**不再凭空插一条
+   `You are a helpful assistant.` 的 system**——官方客户端不这么发，这句固定前缀
+   是全网唯一的指纹。
+
+用法上的三条硬建议：
+
+- 别把反代设成 Hermes 的默认模型天天跑长任务；`agent.max_turns` 拉到 150 时，
+  一次对话就是上百次上游请求。
+- 并发子代理越多，闸门排队越久——那是**故意**的。真要并行就换别的 provider。
+- 看到 403 立刻停，不要「再试一次看看」。
 
 ### 系统代理回环（实测阻塞点，必看）
 

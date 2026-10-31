@@ -476,7 +476,66 @@ async function main() {
     record('冷启动不弹窗检查', false, err?.message || String(err));
   }
 
-  // 11) inspect-vault：明文来源分类且不泄露 token
+  // 11) 指纹统一：Origin/Referer 指向产品站点、UA 与官方 chatUserAgent 同形、不注入默认 system
+  try {
+    const mh = await json(mockPort, 'GET', '/__state');
+    const h = mh.json?.lastHeaders || {};
+    const originOk = h.origin === 'https://www.workbuddy.ai' && h.referer === 'https://www.workbuddy.ai/';
+    const uaOk = /^WorkBuddy\/[\d.]+ WorkBuddy AI\/[\d.]+$/.test(String(h.userAgent || ''));
+    const msgs = mh.json?.lastMessages || [];
+    const noInjectedSystem = !msgs.some((m) => typeof m.content === 'string' && m.content.includes('You are a helpful assistant.'));
+    record(
+      '指纹统一：Origin/Referer 指向产品站点、UA 同官方、不注入默认 system',
+      originOk && uaOk && noInjectedSystem,
+      `origin=${h.origin} referer=${h.referer} ua=${h.userAgent} injected=${!noInjectedSystem}`,
+    );
+  } catch (err) {
+    record('指纹统一检查', false, err?.message || String(err));
+  }
+
+  // 12) 封禁码分类：403 + code 11140 必须是 account_banned（不是普通 client error）
+  try {
+    const ban = await json(proxyPort, 'POST', '/v1/chat/completions', {
+      headers: H,
+      body: JSON.stringify({ model: 'mock-balanced', messages: [{ role: 'user', content: '[BAN]' }] }),
+    });
+    const banOk = ban.status === 403 && ban.json?.error?.type === 'workbuddy_account_banned' && ban.json?.error?.upstream_code === 11140;
+    record('封禁码 11140 → 403 workbuddy_account_banned（带 upstream_code）', banOk, `${ban.status} ${ban.text.slice(0, 240)}`);
+    // 403 必须触发退避：下一次请求会被推迟，日志里要出现 throttle_backoff
+    await sleep(1200);
+    const logText = fs.readFileSync(proxy.__logPath, 'utf8');
+    const backoffLogged = /"event":"throttle_backoff"/.test(logText) && /"reason":"account_banned"/.test(logText);
+    const kindLogged = /"upstream_code":11140/.test(logText) && /"kind":"account_banned"/.test(logText);
+    record('封禁后自动退避且日志记录 upstream_code/kind', backoffLogged && kindLogged, `backoff=${backoffLogged} kind=${kindLogged}`);
+  } catch (err) {
+    record('封禁码分类检查', false, err?.message || String(err));
+  }
+
+  // 13) 节流：连发 4 个请求，最小间隔与每秒窗口必须生效
+  try {
+    const before = (await json(mockPort, 'GET', '/__state')).json?.requestTimes?.length || 0;
+    const t0 = Date.now();
+    await Promise.all(
+      [0, 1, 2, 3].map(() =>
+        json(proxyPort, 'POST', '/v1/chat/completions', {
+          headers: H,
+          body: JSON.stringify({ model: 'mock-balanced', messages: [{ role: 'user', content: 'throttle' }] }),
+        }),
+      ),
+    );
+    const elapsed = Date.now() - t0;
+    const times = (await json(mockPort, 'GET', '/__state')).json?.requestTimes || [];
+    const fresh = times.slice(before);
+    const gaps = fresh.slice(1).map((t, i) => t - fresh[i]);
+    const minGap = gaps.length ? Math.min(...gaps) : 0;
+    // 4 个请求、最小间隔 800ms → 至少 3 个间隔被拉开，总耗时必然 > 2000ms
+    const throttleOk = fresh.length === 4 && gaps.length === 3 && minGap >= 700 && elapsed >= 2000;
+    record('节流生效：并发 4 请求被串行拉平（最小间隔 ≥700ms）', throttleOk, `gaps=${JSON.stringify(gaps)} elapsed=${elapsed}`);
+  } catch (err) {
+    record('节流检查', false, err?.message || String(err));
+  }
+
+  // 14) inspect-vault：明文来源分类且不泄露 token
   const insp = await runInspect(['--json'], {
     ...env,
     WORKBUDDY_PROXY_TOKEN: 'inspect-token-abcdef',

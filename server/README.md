@@ -8,7 +8,7 @@
 | --- | --- |
 | `workbuddy-proxy.mjs` | 反代服务：`POST /v1/chat/completions`、`GET /v1/models`、`GET /v1/auth/status`、`GET /healthz` |
 | `mock-upstream.mjs` | 假上游（OpenAI 形状 SSE），无网络自测用；第一行打印 `MOCK_PORT=xxxxx` |
-| `verify-proxy.mjs` | 端到端验证：起 mock + provider，跑 18 项断言，退出码 0/1 |
+| `verify-proxy.mjs` | 端到端验证：起 mock + provider，跑 22 项断言，退出码 0/1 |
 | `inspect-vault.mjs` | 只读诊断：报告各凭证来源的分类与解密失败阶段，绝不打印 token |
 | `config.example.json` | 配置样例，首次运行复制成 `config.json` |
 
@@ -44,6 +44,10 @@ node verify-proxy.mjs
 | `productName` | `WorkBuddy AI` | 国际版 product 名 |
 | `catalogPath` | `D:\dsh\.workbuddy-ai-catalog.json` | 模型目录缓存，与既有文件兼容 |
 | `credential` | 无 | 可选内联凭证 |
+| `minIntervalMs` | `800` | 两次上游请求的最小间隔（0 = 关） |
+| `maxPerSec` | `2` | 每秒最多几个上游请求（0 = 关） |
+| `backoffBaseMs` | `2000` | 被 403/429 打中后的首次安静期 |
+| `backoffMaxMs` | `60000` | 退避上限；封禁码直接顶到上限 |
 
 `host` 固定 `127.0.0.1`，不提供配置项；反代不接受 `request_timeout_seconds` 之类的键（写了也被忽略）。
 坏配置（JSON 解析失败、字段类型不对）逐字段回落默认值继续跑，不会启动失败。
@@ -69,6 +73,7 @@ node verify-proxy.mjs
 | 上游 401 / `Offline user session not found` / `12153` | `401 workbuddy_session_dead`（提示去 App 重新登录） |
 | 上游 402 / 各种额度不足文案 | `402 workbuddy_credit_exhausted` |
 | 上游 429 | `429` |
+| 上游 403 + 封禁码（`11140` / `11128`）或封禁文案 | `403 workbuddy_account_banned`，`error.upstream_code` 带原始码；退避同时顶到 `backoffMaxMs` |
 | 上游其余 4xx | 透传状态码 + 可读 message |
 | 上游 5xx / 网络失败 | `502 workbuddy_upstream` |
 
